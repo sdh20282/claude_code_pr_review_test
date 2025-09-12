@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Timer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        
+        .timer-container {
+            text-align: center;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .timer-display {
+            font-size: 48px;
+            font-weight: bold;
+            margin: 20px 0;
+            color: #333;
+        }
+        
+        .controls {
+            margin: 20px 0;
+        }
+        
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        .reset-btn {
+            background-color: #dc3545;
+        }
+        
+        .reset-btn:hover {
+            background-color: #c82333;
+        }
+        
+        input {
+            margin: 5px;
+            padding: 8px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 60px;
+        }
+    </style>
+</head>
+<body>
+    <div class="timer-container">
+        <h1>Simple Timer</h1>
+        
+        <div class="timer-display" id="display">00:00:00</div>
+        
+        <div class="controls">
+            <input type="number" id="hours" placeholder="HH" min="0" max="23">
+            <input type="number" id="minutes" placeholder="MM" min="0" max="59">
+            <input type="number" id="seconds" placeholder="SS" min="0" max="59">
+        </div>
+        
+        <div class="controls">
+            <button onclick="startTimer()">Start</button>
+            <button onclick="pauseTimer()">Pause</button>
+            <button onclick="resetTimer()" class="reset-btn">Reset</button>
+        </div>
+    </div>
+
+    <script>
+        var totalSeconds = 0;
+        var isRunning = false;
+        var timerInterval;
+        
+        function updateDisplay() {
+            var hours = Math.floor(totalSeconds / 3600);
+            var minutes = Math.floor((totalSeconds % 3600) / 60);
+            var seconds = totalSeconds % 60;
+            
+            // Bug: Incorrect string padding
+            var display = hours.toString().padStart(2, '0') + ':' + 
+                         minutes.toString().padStart(2, '0') + ':' + 
+                         seconds.toString().padStart(2, '0');
+            
+            document.getElementById('display').innerHTML = display;
+        }
+        
+        function startTimer() {
+            if (!isRunning) {
+                // Inefficiency: Getting input values every time start is clicked
+                var hours = parseInt(document.getElementById('hours').value) || 0;
+                var minutes = parseInt(document.getElementById('minutes').value) || 0;
+                var seconds = parseInt(document.getElementById('seconds').value) || 0;
+                
+                // Bug: No validation for invalid time values
+                totalSeconds = hours * 3600 + minutes * 60 + seconds;
+                
+                isRunning = true;
+                
+                // Inefficiency: Using setInterval instead of more precise timing
+                timerInterval = setInterval(function() {
+                    if (totalSeconds > 0) {
+                        totalSeconds--;
+                        updateDisplay();
+                    } else {
+                        // Bug: Timer doesn't stop when reaching 0
+                        alert('Time is up!');
+                        // Missing: clearInterval and reset isRunning
+                    }
+                }, 1000);
+            }
+        }
+        
+        function pauseTimer() {
+            isRunning = false;
+            clearInterval(timerInterval);
+        }
+        
+        function resetTimer() {
+            isRunning = false;
+            clearInterval(timerInterval);
+            totalSeconds = 0;
+            updateDisplay();
+            
+            // Inefficiency: Clearing input values unnecessarily
+            document.getElementById('hours').value = '';
+            document.getElementById('minutes').value = '';
+            document.getElementById('seconds').value = '';
+        }
+        
+        // Inefficiency: Multiple DOM queries on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateDisplay();
+            document.getElementById('hours').focus();
+        });
+        
+        // Bug: No handling for edge cases like negative numbers
+        // Bug: Timer can be started multiple times without stopping previous interval
+        // Inefficiency: No debouncing for rapid button clicks
+        // Bug: No validation for input fields accepting non-numeric values
+    </script>
+</body>
+</html>
