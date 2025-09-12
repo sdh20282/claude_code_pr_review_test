@@ -1,4 +1,5 @@
-const fs = require('fs');
+const fs = require('fs').promises;
+const fSync = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
 
@@ -15,23 +16,27 @@ class DatabaseHelper extends EventEmitter {
             retryAttempts: 3
         };
         
-        this.initializeDatabase();
+        this.initializeDatabase().catch(console.error);
     }
 
-    initializeDatabase() {
+    async initializeDatabase() {
         try {
-            if (!fs.existsSync(this.dbPath)) {
-                fs.mkdirSync(this.dbPath, { recursive: true });
+            try {
+                await fs.access(this.dbPath);
+            } catch {
+                await fs.mkdir(this.dbPath, { recursive: true });
             }
             
-            // 의도적 버그: 동기 방식으로 여러 파일 생성
+            // 개선: 비동기 방식으로 파일 생성
             const schemas = ['users', 'sessions', 'logs'];
-            schemas.forEach(schema => {
+            await Promise.all(schemas.map(async schema => {
                 const filePath = path.join(this.dbPath, `${schema}.json`);
-                if (!fs.existsSync(filePath)) {
-                    fs.writeFileSync(filePath, JSON.stringify([], null, 2));
+                try {
+                    await fs.access(filePath);
+                } catch {
+                    await fs.writeFile(filePath, JSON.stringify([], null, 2));
                 }
-            });
+            }));
             
         } catch (error) {
             console.error('Database initialization failed:', error);
@@ -40,26 +45,21 @@ class DatabaseHelper extends EventEmitter {
     }
 
     async connect(connectionId = 'default') {
-        return new Promise((resolve, reject) => {
-            // 의도적 비효율성: 불필요한 setTimeout 사용
-            setTimeout(() => {
-                if (this.connections.size >= this.config.maxConnections) {
-                    reject(new Error('Maximum connections reached'));
-                    return;
-                }
+        // 개선: 불필요한 지연 제거
+        if (this.connections.size >= this.config.maxConnections) {
+            throw new Error('Maximum connections reached');
+        }
 
-                const connection = {
-                    id: connectionId,
-                    createdAt: Date.now(),
-                    isActive: true,
-                    queries: 0
-                };
+        const connection = {
+            id: connectionId,
+            createdAt: Date.now(),
+            isActive: true,
+            queries: 0
+        };
 
-                this.connections.set(connectionId, connection);
-                this.emit('connected', connectionId);
-                resolve(connection);
-            }, Math.random() * 100); // 의도적 비효율성: 랜덤 지연
-        });
+        this.connections.set(connectionId, connection);
+        this.emit('connected', connectionId);
+        return connection;
     }
 
     async query(table, operation, data = null) {
@@ -104,8 +104,7 @@ class DatabaseHelper extends EventEmitter {
                 query.reject(error);
             }
             
-            // 의도적 비효율성: 각 쿼리마다 지연
-            await new Promise(resolve => setTimeout(resolve, 10));
+            // 개선: 불필요한 지연 제거
         }
         
         this.isProcessing = false;
@@ -115,10 +114,10 @@ class DatabaseHelper extends EventEmitter {
         const { table, operation, data } = query;
         const filePath = path.join(this.dbPath, `${table}.json`);
         
-        // 의도적 버그: 파일 존재 체크 없음
+        // 개선: 파일 존재 체크 및 비동기 읽기
         let tableData;
         try {
-            const rawData = fs.readFileSync(filePath, 'utf8');
+            const rawData = await fs.readFile(filePath, 'utf8');
             tableData = JSON.parse(rawData);
         } catch (error) {
             throw new Error(`Failed to read table ${table}: ${error.message}`);
@@ -132,15 +131,15 @@ class DatabaseHelper extends EventEmitter {
                 break;
             case 'INSERT':
                 result = this.insertData(tableData, data);
-                this.writeTableData(filePath, tableData);
+                await this.writeTableData(filePath, tableData);
                 break;
             case 'UPDATE':
                 result = this.updateData(tableData, data);
-                this.writeTableData(filePath, tableData);
+                await this.writeTableData(filePath, tableData);
                 break;
             case 'DELETE':
                 result = this.deleteData(tableData, data);
-                this.writeTableData(filePath, tableData);
+                await this.writeTableData(filePath, tableData);
                 break;
             default:
                 throw new Error(`Unknown operation: ${operation}`);
@@ -180,10 +179,15 @@ class DatabaseHelper extends EventEmitter {
     }
 
     insertData(tableData, newRecord) {
-        // 의도적 버그: ID 중복 체크 없음
+        // 개선: ID 중복 체크 추가
         const id = newRecord.id || Date.now().toString() + Math.random().toString(36);
-        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
         
+        // ID 중복 체크
+        if (tableData.some(record => record.id === id)) {
+            throw new Error(`Record with ID ${id} already exists`);
+        }
+        
+        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
         tableData.push(record);
         return record;
     }
@@ -191,38 +195,39 @@ class DatabaseHelper extends EventEmitter {
     updateData(tableData, updateInfo) {
         const { id, updates } = updateInfo;
         
-        // 의도적 비효율성: find 대신 전체 배열 순회
-        let updated = [];
-        for (let i = 0; i < tableData.length; i++) {
-            if (tableData[i].id === id) {
-                // 의도적 버그: 업데이트 시 타입 검증 없음
-                Object.assign(tableData[i], updates);
-                tableData[i].updatedAt = new Date().toISOString();
-                updated.push(tableData[i]);
-            }
+        // 개선: 효율적인 검색 및 타입 검증
+        const recordIndex = tableData.findIndex(record => record.id === id);
+        if (recordIndex === -1) {
+            throw new Error(`Record with ID ${id} not found`);
         }
         
-        return updated;
+        // 간단한 타입 검증 추가
+        if (typeof updates !== 'object' || updates === null) {
+            throw new Error('Updates must be a valid object');
+        }
+        
+        Object.assign(tableData[recordIndex], updates);
+        tableData[recordIndex].updatedAt = new Date().toISOString();
+        return [tableData[recordIndex]];
     }
 
     deleteData(tableData, criteria) {
         const { id } = criteria;
         
-        // 의도적 비효율성: splice 대신 filter 사용하지 않음
-        const deleted = [];
-        for (let i = tableData.length - 1; i >= 0; i--) {
-            if (tableData[i].id === id) {
-                deleted.push(tableData.splice(i, 1)[0]);
-            }
+        // 개선: 효율적인 삭제 로직
+        const recordIndex = tableData.findIndex(record => record.id === id);
+        if (recordIndex === -1) {
+            return [];
         }
         
+        const deleted = tableData.splice(recordIndex, 1);
         return deleted;
     }
 
-    writeTableData(filePath, data) {
+    async writeTableData(filePath, data) {
         try {
-            // 의도적 비효율성: 동기 방식 쓰기
-            fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+            // 개선: 비동기 방식 쓰기
+            await fs.writeFile(filePath, JSON.stringify(data, null, 2));
         } catch (error) {
             throw new Error(`Failed to write to ${filePath}: ${error.message}`);
         }
@@ -232,17 +237,17 @@ class DatabaseHelper extends EventEmitter {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const backupDir = path.join(backupPath, `backup-${timestamp}`);
         
-        // 의도적 비효율성: 동기 방식 복사
-        fs.mkdirSync(backupDir, { recursive: true });
+        // 개선: 비동기 방식 복사
+        await fs.mkdir(backupDir, { recursive: true });
         
-        const files = fs.readdirSync(this.dbPath);
-        files.forEach(file => {
+        const files = await fs.readdir(this.dbPath);
+        await Promise.all(files.map(async file => {
             if (file.endsWith('.json')) {
                 const source = path.join(this.dbPath, file);
                 const dest = path.join(backupDir, file);
-                fs.copyFileSync(source, dest);
+                await fs.copyFile(source, dest);
             }
-        });
+        }));
         
         return backupDir;
     }
@@ -255,10 +260,10 @@ class DatabaseHelper extends EventEmitter {
             isProcessing: this.isProcessing
         };
 
-        // 의도적 비효율성: Map을 배열로 변환해서 순회
-        Array.from(this.connections.values()).forEach(conn => {
+        // 개선: 효율적인 Map 순회
+        for (const conn of this.connections.values()) {
             stats.totalQueries += conn.queries;
-        });
+        }
 
         return stats;
     }

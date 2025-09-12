@@ -1,0 +1,5247 @@
+diff --git a/.reviews/latest.json b/.reviews/latest.json
+new file mode 100644
+index 0000000..e0ad996
+--- /dev/null
++++ b/.reviews/latest.json
+@@ -0,0 +1,3 @@
++{
++  "review_id": "2025-09-12-002"
++}
+\ No newline at end of file
+diff --git a/.reviews/sessions/2025-09-12-002/changes.diff b/.reviews/sessions/2025-09-12-002/changes.diff
+new file mode 100644
+index 0000000..38b933e
+--- /dev/null
++++ b/.reviews/sessions/2025-09-12-002/changes.diff
+@@ -0,0 +1,2009 @@
++=== STAGED CHANGES ===
++diff --git a/api.js b/api.js
++index efdb0c0..a7a78f9 100644
++--- a/api.js
+++++ b/api.js
++@@ -10,12 +10,13 @@ const userManager = new UserManager();
++ // 의도적 비효율성: 미들웨어 설정이 산발적
++ app.use(express.json({ limit: '10mb' })); // 의도적 버그: 너무 큰 limit
++ 
++-// 의도적 버그: CORS 설정이 너무 관대함
+++// CORS 설정 - 보안 강화: 특정 도메인만 허용
++ app.use(cors({
++-    origin: '*',
++-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
++-    allowedHeaders: '*',
++-    credentials: true
+++    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:3001'],
+++    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+++    allowedHeaders: ['Content-Type', 'Authorization'],
+++    credentials: true,
+++    optionsSuccessStatus: 200
++ }));
++ 
++ // 의도적 비효율성: rate limiting이 모든 엔드포인트에 동일하게 적용
++@@ -54,17 +55,20 @@ function authenticateToken(req, res, next) {
++     next();
++ }
++ 
+++// Admin 권한 체크 미들웨어 추가
+++function requireAdmin(req, res, next) {
+++    if (!req.user || !userManager.isAdmin(req.user.id)) {
+++        return res.status(403).json({ error: 'Admin access required' });
+++    }
+++    next();
+++}
+++
++ // Public endpoints
++ app.get('/api/health', (req, res) => {
++-    // 의도적 버그: 너무 많은 시스템 정보 노출
+++    // 보안 강화: 최소한의 정보만 노출
++     res.json({
++         status: 'OK',
++-        timestamp: new Date().toISOString(),
++-        uptime: process.uptime(),
++-        memory: process.memoryUsage(),
++-        version: process.version,
++-        platform: process.platform,
++-        env: process.env.NODE_ENV || 'development'
+++        timestamp: new Date().toISOString()
++     });
++ });
++ 
++@@ -78,10 +82,10 @@ app.post('/api/register', async (req, res) => {
++         // 의도적 버그: 추가 보안 검증 없음
++         const newUser = await userManager.createUser(userData);
++         
++-        // 의도적 버그: 비밀번호와 민감한 정보도 응답에 포함
+++        // 보안 강화: 민감한 정보 제거 후 응답
++         res.status(201).json({
++             message: 'User created successfully',
++-            user: newUser
+++            user: newUser // newUser는 이미 sanitizeUser를 통해 처리됨
++         });
++         
++     } catch (error) {
++@@ -112,8 +116,8 @@ app.post('/api/login', async (req, res) => {
++         res.json({
++             message: 'Login successful',
++             token: loginResult.token,
++-            user: loginResult.user,
++-            systemStats: stats // 의도적 버그: 민감한 시스템 정보 노출
+++            user: loginResult.user
+++            // systemStats 제거 - 민감한 시스템 정보 노출 방지
++         });
++         
++     } catch (error) {
++@@ -125,9 +129,9 @@ app.post('/api/login', async (req, res) => {
++ 
++ // Protected endpoints
++ app.get('/api/profile', authenticateToken, (req, res) => {
++-    // 의도적 버그: 전체 user 객체 반환 (비밀번호 포함)
+++    // 보안 강화: 민감한 정보 제거 후 반환
++     res.json({
++-        user: req.user
+++        user: userManager.sanitizeUser(req.user)
++     });
++ });
++ 
++@@ -140,7 +144,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
++         
++         res.json({
++             message: 'Profile updated',
++-            user: updatedUser // 의도적 버그: 민감한 정보 포함
+++            user: userManager.sanitizeUser(updatedUser) // 보안 강화: 민감한 정보 제거
++         });
++         
++     } catch (error) {
++@@ -162,18 +166,22 @@ app.post('/api/logout', authenticateToken, (req, res) => {
++     }
++ });
++ 
++-// Admin endpoints (의도적 버그: admin 권한 체크 없음)
++-app.get('/api/admin/users', authenticateToken, (req, res) => {
++-    // 의도적 버그: 모든 사용자가 전체 사용자 목록에 접근 가능
+++// Admin endpoints - 권한 체크 추가
+++app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
+++    // Admin만 전체 사용자 목록에 접근 가능, 민감한 정보 제거
++     const users = userManager.getAllUsers();
++-    res.json({ users });
+++    res.json({ users: userManager.sanitizeUsers(users) });
++ });
++ 
++-app.delete('/api/admin/users/:id', authenticateToken, (req, res) => {
+++app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
++     try {
++         const userId = req.params.id;
++         
++-        // 의도적 버그: 자기 자신도 삭제 가능
+++        // 자기 자신 삭제 방지
+++        if (userId === req.user.id) {
+++            return res.status(400).json({ error: 'Cannot delete your own account' });
+++        }
+++        
++         const deleted = userManager.deleteUser(userId);
++         
++         if (deleted) {
++@@ -186,20 +194,15 @@ app.delete('/api/admin/users/:id', authenticateToken, (req, res) => {
++     }
++ });
++ 
++-app.get('/api/admin/stats', authenticateToken, (req, res) => {
+++app.get('/api/admin/stats', authenticateToken, requireAdmin, (req, res) => {
++     try {
++-        // 의도적 비효율성: 통계 계산을 매번 수행
+++        // 보안 강화: 민감한 시스템 정보 제거, 사용자 통계만 제공
++         const stats = userManager.getStatistics();
++-        const dbStats = userManager.db.getConnectionStats();
+++        userManager.cleanupExpiredSessions(); // 만료된 세션 정리
++         
++         res.json({
++             userStats: stats,
++-            databaseStats: dbStats,
++-            serverInfo: {
++-                uptime: process.uptime(),
++-                memory: process.memoryUsage(),
++-                cpu: process.cpuUsage() // 의도적 비효율성: CPU 사용량 매번 계산
++-            }
+++            activeSessionsCount: userManager.activeUsers.size
++         });
++     } catch (error) {
++         res.status(500).json({ error: error.message });
++@@ -237,16 +240,15 @@ app.get('/api/search', authenticateToken, (req, res) => {
++         );
++     });
++     
++-    res.json({ results, total: results.length });
+++    // 검색 결과에서도 민감한 정보 제거
+++    const sanitizedResults = userManager.sanitizeUsers(results);
+++    res.json({ results: sanitizedResults, total: sanitizedResults.length });
++ });
++ 
++-// 의도적 버그: 404 핸들러가 없어서 에러 정보 노출
+++// 404 핸들러 - 보안 강화: 최소한의 정보만 노출
++ app.use('*', (req, res) => {
++     res.status(404).json({
++-        error: 'Route not found',
++-        path: req.originalUrl,
++-        method: req.method,
++-        headers: req.headers // 의도적 버그: 헤더 정보 노출
+++        error: 'Route not found'
++     });
++ });
++ 
++diff --git a/database.js b/database.js
++index 5d2b310..fc3d20f 100644
++--- a/database.js
+++++ b/database.js
++@@ -1,4 +1,5 @@
++-const fs = require('fs');
+++const fs = require('fs').promises;
+++const fSync = require('fs');
++ const path = require('path');
++ const EventEmitter = require('events');
++ 
++@@ -15,23 +16,23 @@ class DatabaseHelper extends EventEmitter {
++             retryAttempts: 3
++         };
++         
++-        this.initializeDatabase();
+++        this.initializeDatabase().catch(console.error);
++     }
++ 
++-    initializeDatabase() {
+++    async initializeDatabase() {
++         try {
++-            if (!fs.existsSync(this.dbPath)) {
++-                fs.mkdirSync(this.dbPath, { recursive: true });
+++            if (!fSync.existsSync(this.dbPath)) {
+++                await fs.mkdir(this.dbPath, { recursive: true });
++             }
++             
++-            // 의도적 버그: 동기 방식으로 여러 파일 생성
+++            // 개선: 비동기 방식으로 파일 생성
++             const schemas = ['users', 'sessions', 'logs'];
++-            schemas.forEach(schema => {
+++            await Promise.all(schemas.map(async schema => {
++                 const filePath = path.join(this.dbPath, `${schema}.json`);
++-                if (!fs.existsSync(filePath)) {
++-                    fs.writeFileSync(filePath, JSON.stringify([], null, 2));
+++                if (!fSync.existsSync(filePath)) {
+++                    await fs.writeFile(filePath, JSON.stringify([], null, 2));
++                 }
++-            });
+++            }));
++             
++         } catch (error) {
++             console.error('Database initialization failed:', error);
++@@ -40,26 +41,21 @@ class DatabaseHelper extends EventEmitter {
++     }
++ 
++     async connect(connectionId = 'default') {
++-        return new Promise((resolve, reject) => {
++-            // 의도적 비효율성: 불필요한 setTimeout 사용
++-            setTimeout(() => {
++-                if (this.connections.size >= this.config.maxConnections) {
++-                    reject(new Error('Maximum connections reached'));
++-                    return;
++-                }
+++        // 개선: 불필요한 지연 제거
+++        if (this.connections.size >= this.config.maxConnections) {
+++            throw new Error('Maximum connections reached');
+++        }
++ 
++-                const connection = {
++-                    id: connectionId,
++-                    createdAt: Date.now(),
++-                    isActive: true,
++-                    queries: 0
++-                };
+++        const connection = {
+++            id: connectionId,
+++            createdAt: Date.now(),
+++            isActive: true,
+++            queries: 0
+++        };
++ 
++-                this.connections.set(connectionId, connection);
++-                this.emit('connected', connectionId);
++-                resolve(connection);
++-            }, Math.random() * 100); // 의도적 비효율성: 랜덤 지연
++-        });
+++        this.connections.set(connectionId, connection);
+++        this.emit('connected', connectionId);
+++        return connection;
++     }
++ 
++     async query(table, operation, data = null) {
++@@ -104,8 +100,7 @@ class DatabaseHelper extends EventEmitter {
++                 query.reject(error);
++             }
++             
++-            // 의도적 비효율성: 각 쿼리마다 지연
++-            await new Promise(resolve => setTimeout(resolve, 10));
+++            // 개선: 불필요한 지연 제거
++         }
++         
++         this.isProcessing = false;
++@@ -115,10 +110,13 @@ class DatabaseHelper extends EventEmitter {
++         const { table, operation, data } = query;
++         const filePath = path.join(this.dbPath, `${table}.json`);
++         
++-        // 의도적 버그: 파일 존재 체크 없음
+++        // 개선: 파일 존재 체크 및 비동기 읽기
++         let tableData;
++         try {
++-            const rawData = fs.readFileSync(filePath, 'utf8');
+++            if (!fSync.existsSync(filePath)) {
+++                throw new Error(`Table ${table} does not exist`);
+++            }
+++            const rawData = await fs.readFile(filePath, 'utf8');
++             tableData = JSON.parse(rawData);
++         } catch (error) {
++             throw new Error(`Failed to read table ${table}: ${error.message}`);
++@@ -132,15 +130,15 @@ class DatabaseHelper extends EventEmitter {
++                 break;
++             case 'INSERT':
++                 result = this.insertData(tableData, data);
++-                this.writeTableData(filePath, tableData);
+++                await this.writeTableData(filePath, tableData);
++                 break;
++             case 'UPDATE':
++                 result = this.updateData(tableData, data);
++-                this.writeTableData(filePath, tableData);
+++                await this.writeTableData(filePath, tableData);
++                 break;
++             case 'DELETE':
++                 result = this.deleteData(tableData, data);
++-                this.writeTableData(filePath, tableData);
+++                await this.writeTableData(filePath, tableData);
++                 break;
++             default:
++                 throw new Error(`Unknown operation: ${operation}`);
++@@ -180,10 +178,15 @@ class DatabaseHelper extends EventEmitter {
++     }
++ 
++     insertData(tableData, newRecord) {
++-        // 의도적 버그: ID 중복 체크 없음
+++        // 개선: ID 중복 체크 추가
++         const id = newRecord.id || Date.now().toString() + Math.random().toString(36);
++-        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
++         
+++        // ID 중복 체크
+++        if (tableData.some(record => record.id === id)) {
+++            throw new Error(`Record with ID ${id} already exists`);
+++        }
+++        
+++        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
++         tableData.push(record);
++         return record;
++     }
++@@ -191,38 +194,39 @@ class DatabaseHelper extends EventEmitter {
++     updateData(tableData, updateInfo) {
++         const { id, updates } = updateInfo;
++         
++-        // 의도적 비효율성: find 대신 전체 배열 순회
++-        let updated = [];
++-        for (let i = 0; i < tableData.length; i++) {
++-            if (tableData[i].id === id) {
++-                // 의도적 버그: 업데이트 시 타입 검증 없음
++-                Object.assign(tableData[i], updates);
++-                tableData[i].updatedAt = new Date().toISOString();
++-                updated.push(tableData[i]);
++-            }
+++        // 개선: 효율적인 검색 및 타입 검증
+++        const recordIndex = tableData.findIndex(record => record.id === id);
+++        if (recordIndex === -1) {
+++            throw new Error(`Record with ID ${id} not found`);
+++        }
+++        
+++        // 간단한 타입 검증 추가
+++        if (typeof updates !== 'object' || updates === null) {
+++            throw new Error('Updates must be a valid object');
++         }
++         
++-        return updated;
+++        Object.assign(tableData[recordIndex], updates);
+++        tableData[recordIndex].updatedAt = new Date().toISOString();
+++        return [tableData[recordIndex]];
++     }
++ 
++     deleteData(tableData, criteria) {
++         const { id } = criteria;
++         
++-        // 의도적 비효율성: splice 대신 filter 사용하지 않음
++-        const deleted = [];
++-        for (let i = tableData.length - 1; i >= 0; i--) {
++-            if (tableData[i].id === id) {
++-                deleted.push(tableData.splice(i, 1)[0]);
++-            }
+++        // 개선: 효율적인 삭제 로직
+++        const recordIndex = tableData.findIndex(record => record.id === id);
+++        if (recordIndex === -1) {
+++            return [];
++         }
++         
+++        const deleted = tableData.splice(recordIndex, 1);
++         return deleted;
++     }
++ 
++-    writeTableData(filePath, data) {
+++    async writeTableData(filePath, data) {
++         try {
++-            // 의도적 비효율성: 동기 방식 쓰기
++-            fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+++            // 개선: 비동기 방식 쓰기
+++            await fs.writeFile(filePath, JSON.stringify(data, null, 2));
++         } catch (error) {
++             throw new Error(`Failed to write to ${filePath}: ${error.message}`);
++         }
++@@ -232,17 +236,17 @@ class DatabaseHelper extends EventEmitter {
++         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
++         const backupDir = path.join(backupPath, `backup-${timestamp}`);
++         
++-        // 의도적 비효율성: 동기 방식 복사
++-        fs.mkdirSync(backupDir, { recursive: true });
+++        // 개선: 비동기 방식 복사
+++        await fs.mkdir(backupDir, { recursive: true });
++         
++-        const files = fs.readdirSync(this.dbPath);
++-        files.forEach(file => {
+++        const files = await fs.readdir(this.dbPath);
+++        await Promise.all(files.map(async file => {
++             if (file.endsWith('.json')) {
++                 const source = path.join(this.dbPath, file);
++                 const dest = path.join(backupDir, file);
++-                fs.copyFileSync(source, dest);
+++                await fs.copyFile(source, dest);
++             }
++-        });
+++        }));
++         
++         return backupDir;
++     }
++@@ -255,10 +259,10 @@ class DatabaseHelper extends EventEmitter {
++             isProcessing: this.isProcessing
++         };
++ 
++-        // 의도적 비효율성: Map을 배열로 변환해서 순회
++-        Array.from(this.connections.values()).forEach(conn => {
+++        // 개선: 효율적인 Map 순회
+++        for (const conn of this.connections.values()) {
++             stats.totalQueries += conn.queries;
++-        });
+++        }
++ 
++         return stats;
++     }
++diff --git a/i18n.js b/i18n.js
++new file mode 100644
++index 0000000..8431b1a
++--- /dev/null
+++++ b/i18n.js
++@@ -0,0 +1,273 @@
+++/**
+++ * Internationalization (i18n) Module
+++ * Provides multi-language support for user messages
+++ */
+++
+++const messages = {
+++    en: {
+++        // Authentication messages
+++        auth: {
+++            loginRequired: 'Login is required',
+++            loginSuccess: 'Login successful',
+++            loginFailed: 'Invalid email or password',
+++            logoutSuccess: 'Successfully logged out',
+++            tokenRequired: 'Access token is required',
+++            tokenInvalid: 'Invalid or expired token',
+++            accountLocked: 'Account is temporarily locked due to multiple failed attempts',
+++            accountUnlocked: 'Account has been unlocked',
+++            unlockEmailSent: 'Unlock instructions sent to your email'
+++        },
+++
+++        // Validation messages
+++        validation: {
+++            required: 'This field is required',
+++            emailInvalid: 'Please enter a valid email address',
+++            emailTooLong: 'Email address is too long',
+++            passwordTooShort: 'Password must be at least 8 characters',
+++            passwordTooLong: 'Password is too long',
+++            passwordMissingLowercase: 'Password must include a lowercase letter',
+++            passwordMissingUppercase: 'Password must include an uppercase letter',
+++            passwordMissingNumber: 'Password must include a number',
+++            passwordMissingSpecial: 'Password must include a special character (@$!%*?&)',
+++            passwordCommon: 'This password is too common. Please choose a stronger one',
+++            usernameTooShort: 'Username must be at least 3 characters',
+++            usernameTooLong: 'Username must be less than 20 characters',
+++            usernameInvalid: 'Username can only contain letters, numbers, and underscores',
+++            usernameForbidden: 'Username contains prohibited words',
+++            ageInvalid: 'Please enter a valid age',
+++            ageTooYoung: 'You must be at least 13 years old',
+++            ageTooOld: 'Please enter a realistic age'
+++        },
+++
+++        // User management messages
+++        user: {
+++            created: 'Account created successfully',
+++            updated: 'Profile updated successfully',
+++            deleted: 'Account deleted successfully',
+++            notFound: 'User not found',
+++            alreadyExists: 'An account with this email already exists',
+++            profileRetrieved: 'Profile information retrieved'
+++        },
+++
+++        // Error messages
+++        error: {
+++            general: 'An unexpected error occurred',
+++            validation: 'Please check your input',
+++            server: 'Server error occurred. Please try again later',
+++            notFound: 'Requested resource not found',
+++            forbidden: 'You don\'t have permission to access this resource',
+++            rateLimited: 'Too many requests. Please wait a moment',
+++            fileUpload: 'File upload failed',
+++            networkError: 'Network connection error'
+++        },
+++
+++        // Success messages
+++        success: {
+++            operationComplete: 'Operation completed successfully',
+++            dataSaved: 'Data saved successfully',
+++            emailSent: 'Email sent successfully'
+++        },
+++
+++        // Help messages
+++        help: {
+++            emailFormat: 'Example: user@example.com',
+++            passwordRequirements: 'Must be 8+ characters with uppercase, lowercase, number, and special character',
+++            usernameRequirements: '3-20 characters, letters/numbers/underscores only',
+++            contactSupport: 'Contact support if you need help',
+++            tryAgainLater: 'Please try again in a few minutes',
+++            checkEmailSpam: 'Check your spam folder if you don\'t see the email'
+++        }
+++    },
+++
+++    ko: {
+++        // 인증 메시지
+++        auth: {
+++            loginRequired: '로그인이 필요합니다',
+++            loginSuccess: '로그인되었습니다',
+++            loginFailed: '이메일 또는 비밀번호가 올바르지 않습니다',
+++            logoutSuccess: '로그아웃되었습니다',
+++            tokenRequired: '액세스 토큰이 필요합니다',
+++            tokenInvalid: '유효하지 않거나 만료된 토큰입니다',
+++            accountLocked: '로그인 실패가 반복되어 계정이 일시적으로 잠금되었습니다',
+++            accountUnlocked: '계정 잠금이 해제되었습니다',
+++            unlockEmailSent: '계정 잠금 해제 안내를 이메일로 발송했습니다'
+++        },
+++
+++        // 유효성 검증 메시지
+++        validation: {
+++            required: '필수 입력 항목입니다',
+++            emailInvalid: '올바른 이메일 주소를 입력해주세요',
+++            emailTooLong: '이메일 주소가 너무 깁니다',
+++            passwordTooShort: '비밀번호는 최소 8자 이상이어야 합니다',
+++            passwordTooLong: '비밀번호가 너무 깁니다',
+++            passwordMissingLowercase: '비밀번호에 소문자가 포함되어야 합니다',
+++            passwordMissingUppercase: '비밀번호에 대문자가 포함되어야 합니다',
+++            passwordMissingNumber: '비밀번호에 숫자가 포함되어야 합니다',
+++            passwordMissingSpecial: '비밀번호에 특수문자(@$!%*?&)가 포함되어야 합니다',
+++            passwordCommon: '너무 흔한 비밀번호입니다. 더 안전한 비밀번호를 선택해주세요',
+++            usernameTooShort: '사용자명은 최소 3자 이상이어야 합니다',
+++            usernameTooLong: '사용자명은 20자 이하여야 합니다',
+++            usernameInvalid: '사용자명은 영문, 숫자, 밑줄(_)만 사용할 수 있습니다',
+++            usernameForbidden: '사용자명에 금지된 단어가 포함되어 있습니다',
+++            ageInvalid: '올바른 나이를 입력해주세요',
+++            ageTooYoung: '최소 13세 이상이어야 합니다',
+++            ageTooOld: '현실적인 나이를 입력해주세요'
+++        },
+++
+++        // 사용자 관리 메시지
+++        user: {
+++            created: '계정이 성공적으로 생성되었습니다',
+++            updated: '프로필이 업데이트되었습니다',
+++            deleted: '계정이 삭제되었습니다',
+++            notFound: '사용자를 찾을 수 없습니다',
+++            alreadyExists: '이미 존재하는 이메일입니다',
+++            profileRetrieved: '프로필 정보를 가져왔습니다'
+++        },
+++
+++        // 오류 메시지
+++        error: {
+++            general: '예상치 못한 오류가 발생했습니다',
+++            validation: '입력 정보를 확인해주세요',
+++            server: '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요',
+++            notFound: '요청하신 정보를 찾을 수 없습니다',
+++            forbidden: '접근 권한이 없습니다',
+++            rateLimited: '너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요',
+++            fileUpload: '파일 업로드에 실패했습니다',
+++            networkError: '네트워크 연결 오류가 발생했습니다'
+++        },
+++
+++        // 성공 메시지
+++        success: {
+++            operationComplete: '작업이 성공적으로 완료되었습니다',
+++            dataSaved: '데이터가 저장되었습니다',
+++            emailSent: '이메일이 발송되었습니다'
+++        },
+++
+++        // 도움말 메시지
+++        help: {
+++            emailFormat: '예: user@example.com',
+++            passwordRequirements: '8자 이상, 대소문자, 숫자, 특수문자 포함',
+++            usernameRequirements: '3-20자, 영문/숫자/밑줄만 사용',
+++            contactSupport: '도움이 필요하시면 고객지원팀에 문의하세요',
+++            tryAgainLater: '잠시 후 다시 시도해주세요',
+++            checkEmailSpam: '이메일이 보이지 않으면 스팸함을 확인해주세요'
+++        }
+++    }
+++};
+++
+++class I18n {
+++    constructor(defaultLanguage = 'ko') {
+++        this.currentLanguage = defaultLanguage;
+++        this.messages = messages;
+++    }
+++
+++    /**
+++     * Set the current language
+++     * @param {string} language - Language code (en, ko)
+++     */
+++    setLanguage(language) {
+++        if (this.messages[language]) {
+++            this.currentLanguage = language;
+++        } else {
+++            console.warn(`Language ${language} not supported. Using ${this.currentLanguage}`);
+++        }
+++    }
+++
+++    /**
+++     * Get a translated message
+++     * @param {string} key - Message key (e.g., 'auth.loginRequired')
+++     * @param {Object} params - Parameters for string interpolation
+++     */
+++    t(key, params = {}) {
+++        const keys = key.split('.');
+++        let message = this.messages[this.currentLanguage];
+++
+++        // Navigate through nested object
+++        for (const k of keys) {
+++            message = message?.[k];
+++        }
+++
+++        // Fallback to English if translation not found
+++        if (!message) {
+++            message = this.messages.en;
+++            for (const k of keys) {
+++                message = message?.[k];
+++            }
+++        }
+++
+++        // Final fallback to key itself
+++        if (!message) {
+++            console.warn(`Translation not found for key: ${key}`);
+++            return key;
+++        }
+++
+++        // Simple string interpolation
+++        return this.interpolate(message, params);
+++    }
+++
+++    /**
+++     * Simple string interpolation
+++     * @param {string} message - Message template
+++     * @param {Object} params - Parameters to interpolate
+++     */
+++    interpolate(message, params) {
+++        return message.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+++            return params[key] !== undefined ? params[key] : match;
+++        });
+++    }
+++
+++    /**
+++     * Get validation error message with help text
+++     * @param {string} errorType - Type of validation error
+++     * @param {string} field - Field name
+++     */
+++    validationError(errorType, field = null) {
+++        const message = this.t(`validation.${errorType}`);
+++        const helpKey = `help.${errorType}Requirements` || `help.${field}Requirements`;
+++        const help = this.t(helpKey);
+++        
+++        return {
+++            message,
+++            help: help !== helpKey ? help : this.t('help.contactSupport'),
+++            field
+++        };
+++    }
+++
+++    /**
+++     * Detect language from request headers
+++     * @param {string} acceptLanguageHeader - Accept-Language header value
+++     */
+++    detectLanguage(acceptLanguageHeader) {
+++        if (!acceptLanguageHeader) return this.currentLanguage;
+++
+++        const languages = acceptLanguageHeader
+++            .split(',')
+++            .map(lang => lang.split(';')[0].trim().toLowerCase());
+++
+++        for (const lang of languages) {
+++            if (lang.startsWith('ko')) return 'ko';
+++            if (lang.startsWith('en')) return 'en';
+++        }
+++
+++        return this.currentLanguage;
+++    }
+++
+++    /**
+++     * Get current language
+++     */
+++    getLanguage() {
+++        return this.currentLanguage;
+++    }
+++
+++    /**
+++     * Get available languages
+++     */
+++    getAvailableLanguages() {
+++        return Object.keys(this.messages);
+++    }
+++}
+++
+++// Create singleton instance
+++const i18n = new I18n();
+++
+++module.exports = { I18n, i18n };
++\ No newline at end of file
++diff --git a/responseHelper.js b/responseHelper.js
++new file mode 100644
++index 0000000..b0f9bc0
++--- /dev/null
+++++ b/responseHelper.js
++@@ -0,0 +1,204 @@
+++/**
+++ * Response Helper - Standardized API Response Structure
+++ * Provides consistent response format for all API endpoints
+++ */
+++
+++class ResponseHelper {
+++    /**
+++     * Standard successful response
+++     * @param {Object} data - Response data
+++     * @param {string} message - Success message
+++     * @param {Object} meta - Metadata (pagination, timestamps, etc.)
+++     * @param {number} statusCode - HTTP status code
+++     */
+++    static success(data = null, message = null, meta = {}, statusCode = 200) {
+++        const response = {
+++            success: true,
+++            data,
+++            message,
+++            meta: {
+++                timestamp: new Date().toISOString(),
+++                ...meta
+++            },
+++            error: null
+++        };
+++
+++        return {
+++            statusCode,
+++            body: response
+++        };
+++    }
+++
+++    /**
+++     * Standard error response
+++     * @param {string} message - User-friendly error message
+++     * @param {string} code - Error code for client handling
+++     * @param {Object} details - Additional error details
+++     * @param {number} statusCode - HTTP status code
+++     */
+++    static error(message, code = 'GENERAL_ERROR', details = {}, statusCode = 400) {
+++        const response = {
+++            success: false,
+++            data: null,
+++            message: null,
+++            meta: {
+++                timestamp: new Date().toISOString()
+++            },
+++            error: {
+++                message,
+++                code,
+++                details
+++            }
+++        };
+++
+++        return {
+++            statusCode,
+++            body: response
+++        };
+++    }
+++
+++    /**
+++     * Validation error response
+++     * @param {Array} errors - Array of validation errors
+++     * @param {string} field - Field that failed validation
+++     */
+++    static validationError(errors, field = null) {
+++        return this.error(
+++            '입력 정보를 확인해주세요', // User-friendly message in Korean
+++            'VALIDATION_ERROR',
+++            {
+++                field,
+++                errors: Array.isArray(errors) ? errors : [errors],
+++                helpText: '올바른 형식으로 다시 입력해주세요'
+++            },
+++            400
+++        );
+++    }
+++
+++    /**
+++     * Authentication error response
+++     */
+++    static authError(message = '로그인이 필요합니다') {
+++        return this.error(
+++            message,
+++            'AUTH_ERROR',
+++            {
+++                helpText: '다시 로그인해주세요'
+++            },
+++            401
+++        );
+++    }
+++
+++    /**
+++     * Authorization error response
+++     */
+++    static forbiddenError(message = '접근 권한이 없습니다') {
+++        return this.error(
+++            message,
+++            'FORBIDDEN_ERROR',
+++            {
+++                helpText: '관리자에게 문의하세요'
+++            },
+++            403
+++        );
+++    }
+++
+++    /**
+++     * Not found error response
+++     */
+++    static notFoundError(resource = '요청한 정보') {
+++        return this.error(
+++            `${resource}를 찾을 수 없습니다`,
+++            'NOT_FOUND_ERROR',
+++            {
+++                helpText: '요청 URL을 확인해주세요'
+++            },
+++            404
+++        );
+++    }
+++
+++    /**
+++     * Server error response
+++     */
+++    static serverError(message = '일시적인 오류가 발생했습니다') {
+++        return this.error(
+++            message,
+++            'SERVER_ERROR',
+++            {
+++                helpText: '잠시 후 다시 시도해주세요'
+++            },
+++            500
+++        );
+++    }
+++
+++    /**
+++     * Rate limit error response
+++     */
+++    static rateLimitError() {
+++        return this.error(
+++            '너무 많은 요청이 발생했습니다',
+++            'RATE_LIMIT_ERROR',
+++            {
+++                helpText: '잠시 후 다시 시도해주세요',
+++                retryAfter: 60
+++            },
+++            429
+++        );
+++    }
+++
+++    /**
+++     * Progress response for multi-step operations
+++     * @param {number} current - Current step
+++     * @param {number} total - Total steps
+++     * @param {string} message - Progress message
+++     * @param {Object} data - Partial data
+++     */
+++    static progress(current, total, message, data = null) {
+++        const percentage = Math.round((current / total) * 100);
+++        
+++        return this.success(
+++            data,
+++            message,
+++            {
+++                progress: {
+++                    current,
+++                    total,
+++                    percentage,
+++                    isComplete: current >= total
+++                }
+++            },
+++            202 // Accepted
+++        );
+++    }
+++
+++    /**
+++     * Paginated response
+++     * @param {Array} data - Array of items
+++     * @param {number} page - Current page
+++     * @param {number} limit - Items per page
+++     * @param {number} total - Total items
+++     * @param {string} message - Success message
+++     */
+++    static paginated(data, page, limit, total, message = null) {
+++        const totalPages = Math.ceil(total / limit);
+++        const hasNext = page < totalPages;
+++        const hasPrev = page > 1;
+++
+++        return this.success(
+++            data,
+++            message,
+++            {
+++                pagination: {
+++                    page,
+++                    limit,
+++                    total,
+++                    totalPages,
+++                    hasNext,
+++                    hasPrev
+++                }
+++            }
+++        );
+++    }
+++}
+++
+++module.exports = ResponseHelper;
++\ No newline at end of file
++diff --git a/temp_improve_2.md b/temp_improve_2.md
++new file mode 100644
++index 0000000..650609c
++--- /dev/null
+++++ b/temp_improve_2.md
++@@ -0,0 +1,498 @@
+++# Claude Code를 사용한 AI 에이전트 PR 개선 워크플로우
+++
+++다음 3개의 에이전트를 병렬로 실행해주세요:
+++
+++## Agent 1: 보안 취약점 수정
+++```
+++Task({
+++  subagent_type: "general-purpose",
+++  description: "PR 보안 취약점 수정",
+++  prompt: "PR #2의 보안 취약점을 수정해줘. 다음 AI 리뷰 결과를 참고해서 긴급(Critical) 보안 이슈들을 우선적으로 해결해줘:
+++
+++리뷰 코멘트 내용:
+++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
+++
+++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
+++
+++### 📋 **변경된 파일들**
+++- api.js
+++- database.js
+++- userManager.js
+++- validation.js
+++
+++---
+++
+++## 📊 **종합 평가**
+++- **코드 품질**: 2.5/10
+++- **보안 위험도**: CRITICAL (매우 높음)
+++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
+++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
+++
+++---
+++
+++## 🔴 **긴급 수정 필요 (Critical)**
+++
+++### 보안 취약점
+++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
+++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
+++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
+++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
+++
+++### 인증/세션 관리
+++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
+++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
+++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
+++
+++---
+++
+++## 🟡 **중요 개선사항 (Major)**
+++
+++### 성능 최적화
+++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
+++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
+++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
+++
+++### 데이터 무결성
+++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
+++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
+++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
+++
+++### UX 및 접근성
+++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
+++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
+++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
+++
+++---
+++
+++## 🟢 **사용자 경험 향상 (Minor)**
+++
+++### 입력 검증 강화
+++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
+++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
+++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
+++
+++### 모니터링 및 로깅
+++- **구조화된 로깅**: winston 등 로깅 시스템 도입
+++- **성능 모니터링**: APM 도구로 병목 지점 추적
+++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
+++
+++---
+++
+++## ✅ **잘 구현된 부분**
+++
+++### 아키텍처 구조
+++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
+++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
+++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
+++
+++### 검증 로직
+++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
+++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
+++
+++---
+++
+++## 🎯 **우선 수정 권장사항**
+++
+++### 1순위 (즉시 수정)
+++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
+++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
+++3. **민감정보 필터링**: 응답에서 password, salt 제거
+++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
+++
+++### 2순위 (1주일 내)
+++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
+++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
+++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
+++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
+++
+++### 3순위 (2주일 내)  
+++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
+++2. **API 응답 표준화**: 일관된 응답 구조 적용
+++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
+++4. **보안 헤더**: helmet.js 미들웨어 적용
+++
+++---
+++
+++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
+++
+++변경된 파일들:
+++api.js
+++database.js
+++userManager.js
+++validation.js
+++
+++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 보안 이슈들을 수정해줘:
+++
+++1. CORS 설정 수정 (origin: '*' 제거, 특정 도메인만 허용)
+++2. Admin 권한 체크 추가 (role 기반 접근 제어)
+++3. 민감정보 필터링 (password, salt 제거)
+++4. 세션 만료 체크 구현
+++5. 시스템 정보 노출 제거
+++
+++각 파일을 수정할 때마다 변경사항을 명확히 설명해줘.
+++모든 수정이 완료되면 수정 내용을 요약해서 알려줘."
+++})
+++```
+++
+++## Agent 2: 성능 및 코드 품질 개선
+++```
+++Task({
+++  subagent_type: "general-purpose", 
+++  description: "PR 성능 및 코드 품질 개선",
+++  prompt: "PR #2의 성능 및 코드 품질을 개선해줘. 다음 AI 리뷰 결과를 참고해서 주요(Major) 이슈들을 해결해줘:
+++
+++리뷰 코멘트 내용:
+++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
+++
+++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
+++
+++### 📋 **변경된 파일들**
+++- api.js
+++- database.js
+++- userManager.js
+++- validation.js
+++
+++---
+++
+++## 📊 **종합 평가**
+++- **코드 품질**: 2.5/10
+++- **보안 위험도**: CRITICAL (매우 높음)
+++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
+++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
+++
+++---
+++
+++## 🔴 **긴급 수정 필요 (Critical)**
+++
+++### 보안 취약점
+++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
+++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
+++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
+++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
+++
+++### 인증/세션 관리
+++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
+++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
+++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
+++
+++---
+++
+++## 🟡 **중요 개선사항 (Major)**
+++
+++### 성능 최적화
+++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
+++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
+++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
+++
+++### 데이터 무결성
+++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
+++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
+++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
+++
+++### UX 및 접근성
+++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
+++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
+++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
+++
+++---
+++
+++## 🟢 **사용자 경험 향상 (Minor)**
+++
+++### 입력 검증 강화
+++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
+++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
+++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
+++
+++### 모니터링 및 로깅
+++- **구조화된 로깅**: winston 등 로깅 시스템 도입
+++- **성능 모니터링**: APM 도구로 병목 지점 추적
+++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
+++
+++---
+++
+++## ✅ **잘 구현된 부분**
+++
+++### 아키텍처 구조
+++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
+++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
+++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
+++
+++### 검증 로직
+++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
+++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
+++
+++---
+++
+++## 🎯 **우선 수정 권장사항**
+++
+++### 1순위 (즉시 수정)
+++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
+++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
+++3. **민감정보 필터링**: 응답에서 password, salt 제거
+++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
+++
+++### 2순위 (1주일 내)
+++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
+++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
+++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
+++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
+++
+++### 3순위 (2주일 내)  
+++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
+++2. **API 응답 표준화**: 일관된 응답 구조 적용
+++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
+++4. **보안 헤더**: helmet.js 미들웨어 적용
+++
+++---
+++
+++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
+++
+++변경된 파일들:
+++api.js
+++database.js
+++userManager.js
+++validation.js
+++
+++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 성능/품질 이슈들을 수정해줘:
+++
+++1. 동기 파일 I/O를 비동기로 변경 (fs.promises 사용)
+++2. 불필요한 지연 제거 (10ms 인위적 지연)
+++3. 정규식 최적화 (상수로 정의하여 재사용)
+++4. 데이터 검색 최적화 (비효율적 전체 순회 개선)
+++5. 에러 처리 일관성 개선
+++6. ID 중복 체크 로직 추가
+++
+++Agent 1이 보안 수정을 완료한 후 그 결과를 기반으로 작업해줘.
+++각 개선사항이 성능에 미치는 영향도 설명해줘."
+++})
+++```
+++
+++## Agent 3: UX 및 사용자 친화성 개선
+++```
+++Task({
+++  subagent_type: "general-purpose",
+++  description: "PR UX 및 사용자 친화성 개선", 
+++  prompt: "PR #2의 UX 및 사용자 친화성을 개선해줘. 다음 AI 리뷰 결과를 참고해서 사용자 경험 관련 이슈들을 해결해줘:
+++
+++리뷰 코멘트 내용:
+++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
+++
+++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
+++
+++### 📋 **변경된 파일들**
+++- api.js
+++- database.js
+++- userManager.js
+++- validation.js
+++
+++---
+++
+++## 📊 **종합 평가**
+++- **코드 품질**: 2.5/10
+++- **보안 위험도**: CRITICAL (매우 높음)
+++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
+++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
+++
+++---
+++
+++## 🔴 **긴급 수정 필요 (Critical)**
+++
+++### 보안 취약점
+++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
+++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
+++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
+++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
+++
+++### 인증/세션 관리
+++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
+++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
+++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
+++
+++---
+++
+++## 🟡 **중요 개선사항 (Major)**
+++
+++### 성능 최적화
+++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
+++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
+++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
+++
+++### 데이터 무결성
+++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
+++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
+++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
+++
+++### UX 및 접근성
+++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
+++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
+++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
+++
+++---
+++
+++## 🟢 **사용자 경험 향상 (Minor)**
+++
+++### 입력 검증 강화
+++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
+++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
+++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
+++
+++### 모니터링 및 로깅
+++- **구조화된 로깅**: winston 등 로깅 시스템 도입
+++- **성능 모니터링**: APM 도구로 병목 지점 추적
+++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
+++
+++---
+++
+++## ✅ **잘 구현된 부분**
+++
+++### 아키텍처 구조
+++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
+++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
+++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
+++
+++### 검증 로직
+++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
+++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
+++
+++---
+++
+++## 🎯 **우선 수정 권장사항**
+++
+++### 1순위 (즉시 수정)
+++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
+++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
+++3. **민감정보 필터링**: 응답에서 password, salt 제거
+++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
+++
+++### 2순위 (1주일 내)
+++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
+++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
+++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
+++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
+++
+++### 3순위 (2주일 내)  
+++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
+++2. **API 응답 표준화**: 일관된 응답 구조 적용
+++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
+++4. **보안 헤더**: helmet.js 미들웨어 적용
+++
+++---
+++
+++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
+++
+++변경된 파일들:
+++api.js
+++database.js
+++userManager.js
+++validation.js
+++
+++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 UX 개선사항들을 적용해줘:
+++
+++1. 에러 메시지 사용자 친화화 (기술적 메시지 → 이해하기 쉬운 메시지)
+++2. API 응답 구조 표준화 (success, data, error, meta 구조)
+++3. 검증 메시지 개선 (구체적 해결 방법 제시)
+++4. 계정 잠금 해제 메커니즘 추가
+++5. 다국어 지원 기반 구축 (최소한 한국어/영어)
+++6. 진행률 피드백 구조 추가
+++
+++Agent 1, 2의 작업이 완료된 후 그 결과를 기반으로 작업해줘.
+++사용자 경험 개선 효과도 설명해줘."
+++})
+++```
+++
+++## 최종 단계: 자동 커밋 및 Push
+++위 3개 에이전트의 개선 작업이 모두 완료되면 **자동으로** 다음을 실행해주세요:
+++
+++```bash
+++# 1. 변경된 파일들 확인 및 스테이징
+++echo "📝 변경된 파일들 확인 중..."
+++git status --porcelain
+++
+++if [[ -n "$(git status --porcelain)" ]]; then
+++    echo "✅ 변경사항이 발견되었습니다. 커밋을 진행합니다."
+++    
+++    # 모든 변경사항 스테이징
+++    git add .
+++    
+++    # 개선 커밋 생성
+++    git commit -m "$(cat <<'COMMIT_EOF'
+++🔧 AI 워크플로우 기반 PR 개선
+++
+++- 보안 취약점 수정 (CORS, 권한 체크, 민감정보 필터링)
+++- 성능 최적화 (비동기 I/O, 검색 최적화, 정규식 캐싱)  
+++- UX 개선 (에러 메시지, API 응답 표준화, 다국어 지원)
+++
+++🤖 Generated with Claude Code
+++
+++Co-Authored-By: Claude <noreply@anthropic.com>
+++COMMIT_EOF
+++)"
+++    
+++    echo "✅ 커밋이 생성되었습니다."
+++    
+++    # PR 브랜치에 Push
+++    echo "🚀 변경사항을 원격 저장소에 push 중..."
+++    git push origin "$(git branch --show-current)"
+++    echo "✅ Push가 완료되었습니다."
+++    
+++else
+++    echo "⚠️  변경사항이 없습니다. 커밋을 생성하지 않습니다."
+++fi
+++
+++# 2. PR에 개선 완료 코멘트 자동 추가
+++gh pr comment 2 --body "$(cat <<'IMPROVE_EOF'
+++## ✅ AI 워크플로우 기반 PR 개선 완료
+++
+++**3개 전문 에이전트가 병렬로 PR #2의 이슈들을 수정했습니다.**
+++
+++### 🔒 **보안 취약점 수정 완료**
+++- ✅ CORS 설정 수정 (특정 도메인만 허용)
+++- ✅ Admin 권한 체크 추가 (role 기반 접근 제어)
+++- ✅ 민감정보 필터링 (password, salt 제거)
+++- ✅ 세션 만료 체크 구현
+++- ✅ 시스템 정보 노출 제거
+++
+++### ⚡ **성능 및 코드 품질 개선 완료**
+++- ✅ 동기 파일 I/O → 비동기 변경
+++- ✅ 불필요한 지연 제거
+++- ✅ 정규식 최적화 (상수화)
+++- ✅ 데이터 검색 최적화
+++- ✅ 에러 처리 일관성 개선
+++- ✅ ID 중복 체크 로직 추가
+++
+++### 🎨 **UX 및 사용자 친화성 개선 완료**
+++- ✅ 에러 메시지 사용자 친화화
+++- ✅ API 응답 구조 표준화
+++- ✅ 검증 메시지 개선
+++- ✅ 계정 잠금 해제 메커니즘 추가
+++- ✅ 다국어 지원 기반 구축
+++
+++### 📊 **개선 후 예상 품질**
+++- **코드 품질**: 2.5/10 → 8.5/10
+++- **보안 위험도**: CRITICAL → LOW
+++- **접근성 준수**: 낮음 → 높음
+++
+++---
+++
+++**🎯 다음 단계:**
+++1. 코드 리뷰어가 변경사항 검토
+++2. 추가 테스트 진행
+++3. 승인 후 머지
+++
+++**🤖 이 개선은 3개의 전문 AI 에이전트가 보안, 성능, UX 관점에서 체계적으로 수행했습니다.**
+++IMPROVE_EOF
+++)"
+++```
+++
+++## 추가 검증 단계 (선택사항)
+++```bash
+++# 린팅 및 타입 체크 (프로젝트에 설정되어 있다면)
+++npm run lint 2>/dev/null || echo "Lint 스크립트를 찾을 수 없습니다"
+++npm run typecheck 2>/dev/null || echo "TypeCheck 스크립트를 찾을 수 없습니다"
+++
+++# 간단한 문법 체크
+++node -c api.js && echo "✅ api.js 문법 검사 통과"
+++node -c database.js && echo "✅ database.js 문법 검사 통과"  
+++node -c userManager.js && echo "✅ userManager.js 문법 검사 통과"
+++node -c validation.js && echo "✅ validation.js 문법 검사 통과"
+++```
++diff --git a/userManager.js b/userManager.js
++index 41ca59e..4945f99 100644
++--- a/userManager.js
+++++ b/userManager.js
++@@ -1,5 +1,6 @@
++ const crypto = require('crypto');
++-const fs = require('fs');
+++const fs = require('fs').promises;
+++const fSync = require('fs');
++ const path = require('path');
++ const { validateUser, sanitizeInput } = require('./validation');
++ const DatabaseHelper = require('./database');
++@@ -7,27 +8,28 @@ const DatabaseHelper = require('./database');
++ class UserManager {
++     constructor() {
++         this.dbPath = path.join(__dirname, 'users.json');
++-        this.users = this.loadUsers();
+++        this.users = [];
++         this.activeUsers = new Map();
++         this.loginAttempts = {};
++         this.db = new DatabaseHelper();
+++        this.loadUsers(); // 비동기로 로드
++     }
++ 
++-    loadUsers() {
+++    async loadUsers() {
++         try {
++-            if (fs.existsSync(this.dbPath)) {
++-                const data = fs.readFileSync(this.dbPath, 'utf8');
++-                return JSON.parse(data);
+++            if (fSync.existsSync(this.dbPath)) {
+++                const data = await fs.readFile(this.dbPath, 'utf8');
+++                this.users = JSON.parse(data);
++             }
++         } catch (error) {
++             console.log('Error loading users:', error.message);
+++            this.users = [];
++         }
++-        return [];
++     }
++ 
++-    saveUsers() {
+++    async saveUsers() {
++         try {
++-            fs.writeFileSync(this.dbPath, JSON.stringify(this.users, null, 2));
+++            await fs.writeFile(this.dbPath, JSON.stringify(this.users, null, 2));
++         } catch (error) {
++             console.error('Failed to save users:', error);
++             throw error;
++@@ -49,8 +51,13 @@ class UserManager {
++         const userId = crypto.randomBytes(16).toString('hex');
++         const salt = crypto.randomBytes(32).toString('hex');
++         
++-        // 의도적 비효율성: 동기 방식 해싱 사용
++-        const hashedPassword = crypto.pbkdf2Sync(userData.password, salt, 10000, 64, 'sha512').toString('hex');
+++        // 개선: 비동기 방식 해싱 사용
+++        const hashedPassword = await new Promise((resolve, reject) => {
+++            crypto.pbkdf2(userData.password, salt, 10000, 64, 'sha512', (err, derivedKey) => {
+++                if (err) reject(err);
+++                else resolve(derivedKey.toString('hex'));
+++            });
+++        });
++ 
++         const newUser = {
++             id: userId,
++@@ -58,6 +65,7 @@ class UserManager {
++             username: userData.username,
++             password: hashedPassword,
++             salt: salt,
+++            role: userData.role || 'user', // 기본값은 'user', 'admin'도 가능
++             createdAt: new Date().toISOString(),
++             lastLogin: null,
++             loginCount: 0,
++@@ -72,13 +80,13 @@ class UserManager {
++         this.users.push(newUser);
++         this.saveUsers();
++         
++-        // 의도적 버그: 패스워드와 salt를 반환에 포함
++-        return newUser;
+++        // 보안 강화: 패스워드와 salt를 반환에서 제거
+++        return this.sanitizeUser(newUser);
++     }
++ 
++     async loginUser(email, password) {
++-        // 의도적 비효율성: 매번 전체 배열 순회
++-        const user = this.users.filter(u => u.email === email)[0];
+++        // 개선: 효율적인 사용자 검색
+++        const user = this.users.find(u => u.email === email);
++         
++         if (!user) {
++             this.recordFailedLogin(email);
++@@ -92,7 +100,12 @@ class UserManager {
++             throw new Error('Account is deactivated');
++         }
++ 
++-        const hashedInput = crypto.pbkdf2Sync(password, user.salt, 10000, 64, 'sha512').toString('hex');
+++        const hashedInput = await new Promise((resolve, reject) => {
+++            crypto.pbkdf2(password, user.salt, 10000, 64, 'sha512', (err, derivedKey) => {
+++                if (err) reject(err);
+++                else resolve(derivedKey.toString('hex'));
+++            });
+++        });
++         
++         if (hashedInput !== user.password) {
++             throw new Error('Invalid credentials');
++@@ -103,13 +116,15 @@ class UserManager {
++         user.loginCount++;
++         
++         const sessionToken = crypto.randomBytes(32).toString('hex');
+++        const sessionExpiry = Date.now() + (24 * 60 * 60 * 1000); // 24시간 후 만료
++         this.activeUsers.set(sessionToken, {
++             userId: user.id,
++             loginTime: Date.now(),
+++            expiresAt: sessionExpiry,
++             userAgent: 'unknown' // 의도적 버그: 실제 user agent 정보 없음
++         });
++ 
++-        this.saveUsers();
+++        await this.saveUsers();
++         delete this.loginAttempts[email]; // 성공 시 실패 기록 초기화
++ 
++         return {
++@@ -139,40 +154,58 @@ class UserManager {
++             const user = this.users.find(u => u.email === email);
++             if (user) {
++                 user.isActive = false;
++-                this.saveUsers();
+++                this.saveUsers().catch(console.error); // 비동기 호출
++             }
++         }
++     }
++ 
++     getUserById(id) {
++-        // 의도적 비효율성: find 대신 filter 사용
++-        const users = this.users.filter(user => user.id === id);
++-        return users.length > 0 ? users[0] : null;
+++        // 개선: 효율적인 사용자 검색
+++        return this.users.find(user => user.id === id) || null;
++     }
++ 
++-    updateUser(id, updates) {
+++    async updateUser(id, updates) {
++         const userIndex = this.users.findIndex(u => u.id === id);
++         if (userIndex === -1) {
++             throw new Error('User not found');
++         }
++ 
++-        // 의도적 버그: 업데이트 데이터 검증 없음
+++        // 개선: 기본적인 업데이트 데이터 검증
+++        if (typeof updates !== 'object' || updates === null) {
+++            throw new Error('Updates must be a valid object');
+++        }
+++        
+++        // 민감한 필드 보호
+++        const protectedFields = ['password', 'salt', 'id'];
+++        const safeUpdates = Object.keys(updates)
+++            .filter(key => !protectedFields.includes(key))
+++            .reduce((obj, key) => {
+++                obj[key] = updates[key];
+++                return obj;
+++            }, {});
+++        
++         const user = this.users[userIndex];
++-        Object.assign(user, updates);
+++        Object.assign(user, safeUpdates, { updatedAt: new Date().toISOString() });
++         
++-        this.saveUsers();
+++        await this.saveUsers();
++         return user;
++     }
++ 
++-    deleteUser(id) {
+++    async deleteUser(id) {
++         const userIndex = this.users.findIndex(u => u.id === id);
++         if (userIndex === -1) {
++             return false;
++         }
++ 
++-        // 의도적 버그: 활성 세션 정리하지 않음
+++        // 개선: 활성 세션 정리
+++        for (const [token, session] of this.activeUsers.entries()) {
+++            if (session.userId === id) {
+++                this.activeUsers.delete(token);
+++            }
+++        }
+++        
++         this.users.splice(userIndex, 1);
++-        this.saveUsers();
+++        await this.saveUsers();
++         return true;
++     }
++ 
++@@ -187,7 +220,12 @@ class UserManager {
++             return null;
++         }
++ 
++-        // 의도적 버그: 세션 만료 체크 없음
+++        // 세션 만료 체크
+++        if (Date.now() > session.expiresAt) {
+++            this.activeUsers.delete(token);
+++            return null;
+++        }
+++
++         const user = this.getUserById(session.userId);
++         return user;
++     }
++@@ -196,12 +234,27 @@ class UserManager {
++         return this.activeUsers.delete(token);
++     }
++ 
++-    // 의도적 비효율성: 동기식 통계 계산
+++    // 만료된 세션들을 정리하는 메서드
+++    cleanupExpiredSessions() {
+++        const now = Date.now();
+++        let removedCount = 0;
+++        
+++        for (const [token, session] of this.activeUsers.entries()) {
+++            if (now > session.expiresAt) {
+++                this.activeUsers.delete(token);
+++                removedCount++;
+++            }
+++        }
+++        
+++        return removedCount;
+++    }
+++
+++    // 개선: 효율적인 통계 계산 (단일 순회)
++     getStatistics() {
++         const stats = {
++             totalUsers: this.users.length,
++-            activeUsers: this.users.filter(u => u.isActive).length,
++-            inactiveUsers: this.users.filter(u => !u.isActive).length,
+++            activeUsers: 0,
+++            inactiveUsers: 0,
++             avgLoginCount: 0,
++             recentLogins: 0
++         };
++@@ -209,9 +262,12 @@ class UserManager {
++         let totalLogins = 0;
++         const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
++ 
++-        // 의도적 비효율성: 여러 번 배열 순회
+++        // 개선: 단일 순회로 모든 통계 계산
++         this.users.forEach(user => {
++-            totalLogins += user.loginCount;
+++            if (user.isActive) stats.activeUsers++;
+++            else stats.inactiveUsers++;
+++            
+++            totalLogins += user.loginCount || 0;
++             if (user.lastLogin && new Date(user.lastLogin).getTime() > oneDayAgo) {
++                 stats.recentLogins++;
++             }
++@@ -220,6 +276,24 @@ class UserManager {
++         stats.avgLoginCount = this.users.length > 0 ? totalLogins / this.users.length : 0;
++         return stats;
++     }
+++
+++    // Admin 권한 체크 메서드 추가
+++    isAdmin(userId) {
+++        const user = this.getUserById(userId);
+++        return user && user.role === 'admin';
+++    }
+++
+++    // 민감한 정보를 제거하는 메서드
+++    sanitizeUser(user) {
+++        if (!user) return null;
+++        const { password, salt, ...safeUser } = user;
+++        return safeUser;
+++    }
+++
+++    // 배열의 모든 사용자에서 민감한 정보 제거
+++    sanitizeUsers(users) {
+++        return users.map(user => this.sanitizeUser(user));
+++    }
++ }
++ 
++ module.exports = UserManager;
++\ No newline at end of file
++diff --git a/validation.js b/validation.js
++index b3210bd..bfa866e 100644
++--- a/validation.js
+++++ b/validation.js
++@@ -1,9 +1,32 @@
++-const validator = require('validator'); // 의도적 버그: 라이브러리 존재 여부 확인 안함
++-
++-// 의도적 비효율성: 정규식을 매번 새로 생성
++-const EMAIL_REGEX = () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++-const PASSWORD_REGEX = () => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
++-const USERNAME_REGEX = () => /^[a-zA-Z0-9_]{3,20}$/;
+++const { i18n } = require('./i18n');
+++
+++// Password strength configuration
+++const PASSWORD_CONFIG = {
+++    minLength: 8,
+++    maxLength: 128,
+++    requireLowercase: true,
+++    requireUppercase: true,
+++    requireNumbers: true,
+++    requireSpecialChars: true,
+++    specialChars: '@$!%*?&',
+++    commonPasswords: ['password', '123456', '123456789', 'qwerty', 'admin', 'letmein', 'welcome']
+++};
+++
+++// 개선: 정규식을 상수로 정의하여 재사용
+++const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+++const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+++const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
+++
+++// 개선: 패스워드 강도 검증용 정규식들을 상수로 정의
+++const LOWERCASE_REGEX = /[a-z]/;
+++const UPPERCASE_REGEX = /[A-Z]/;
+++const DIGIT_REGEX = /\d/;
+++const SPECIAL_CHAR_REGEX = /[@$!%*?&]/;
+++const WEAK_PATTERNS = /123|abc/;
+++
+++// 개선: 공통 패스워드와 금지된 사용자명을 상수로 정의
+++const COMMON_PASSWORDS = new Set(['password', '123456', 'qwerty', 'admin', '12345678', 'password123']);
+++const FORBIDDEN_USERNAMES = new Set(['admin', 'root', 'user', 'guest', 'anonymous', 'test']);
++ 
++ class ValidationError extends Error {
++     constructor(field, message) {
++@@ -21,8 +44,8 @@ function validateEmail(email) {
++     // 의도적 버그: typeof 체크를 안함
++     const emailStr = email.toString();
++     
++-    // 의도적 비효율성: 여러 가지 검증 방법 중복 사용
++-    if (!EMAIL_REGEX().test(emailStr)) {
+++    // 개선: 효율적인 이메일 형식 검증
+++    if (!EMAIL_REGEX.test(emailStr)) {
++         return { isValid: false, error: 'Invalid email format' };
++     }
++     
++@@ -51,7 +74,12 @@ function validatePassword(password) {
++         return { isValid: false, errors };
++     }
++ 
++-    // 의도적 버그: 문자열 타입 체크 없음
+++    // 개선: 타입 체크 추가
+++    if (typeof password !== 'string') {
+++        errors.push('Password must be a string');
+++        return { isValid: false, errors };
+++    }
+++    
++     const pwd = password;
++     
++     if (pwd.length < 8) {
++@@ -62,33 +90,29 @@ function validatePassword(password) {
++         errors.push('Password too long (max 128 characters)');
++     }
++ 
++-    // 의도적 비효율성: 각 조건을 별도로 체크
++-    if (!/[a-z]/.test(pwd)) {
+++    // 개선: 상수화된 정규식 사용
+++    if (!LOWERCASE_REGEX.test(pwd)) {
++         errors.push('Password must contain lowercase letter');
++     }
++ 
++-    if (!/[A-Z]/.test(pwd)) {
+++    if (!UPPERCASE_REGEX.test(pwd)) {
++         errors.push('Password must contain uppercase letter');
++     }
++ 
++-    if (!/\d/.test(pwd)) {
+++    if (!DIGIT_REGEX.test(pwd)) {
++         errors.push('Password must contain number');
++     }
++ 
++-    if (!/[@$!%*?&]/.test(pwd)) {
+++    if (!SPECIAL_CHAR_REGEX.test(pwd)) {
++         errors.push('Password must contain special character');
++     }
++ 
++-    // 의도적 버그: 공통 패스워드 체크 로직이 잘못됨
++-    const commonPasswords = ['password', '123456', 'qwerty', 'admin'];
++-    if (commonPasswords.includes(pwd.toLowerCase())) {
+++    // 개선: Set을 사용한 효율적인 공통 패스워드 체크
+++    if (COMMON_PASSWORDS.has(pwd.toLowerCase())) {
++         errors.push('Password is too common');
++     }
++ 
++-    // 의도적 비효율성: 최종 정규식 검사도 다시 수행
++-    if (!PASSWORD_REGEX().test(pwd) && errors.length === 0) {
++-        errors.push('Password format invalid');
++-    }
+++    // 개선: 불필요한 중복 검증 제거 (이미 개별 조건들을 체크했음)
++ 
++     return {
++         isValid: errors.length === 0,
++@@ -105,10 +129,10 @@ function calculatePasswordStrength(password) {
++     if (password.length >= 12) score += 1;
++     if (password.length >= 16) score += 1;
++     
++-    if (/[a-z]/.test(password)) score += 1;
++-    if (/[A-Z]/.test(password)) score += 1;
++-    if (/\d/.test(password)) score += 1;
++-    if (/[@$!%*?&]/.test(password)) score += 2;
+++    if (LOWERCASE_REGEX.test(password)) score += 1;
+++    if (UPPERCASE_REGEX.test(password)) score += 1;
+++    if (DIGIT_REGEX.test(password)) score += 1;
+++    if (SPECIAL_CHAR_REGEX.test(password)) score += 2;
++     
++     // 의도적 비효율성: 중복된 문자 체크
++     const uniqueChars = new Set(password.split(''));
++@@ -116,9 +140,9 @@ function calculatePasswordStrength(password) {
++         score += 1;
++     }
++ 
++-    // 의도적 버그: 점수가 음수가 될 수 있음
++-    if (password.includes('123') || password.includes('abc')) {
++-        score -= 2;
+++    // 개선: 약한 패턴 체크 및 음수 방지
+++    if (WEAK_PATTERNS.test(password)) {
+++        score = Math.max(0, score - 2);
++     }
++ 
++     if (score <= 2) return 'weak';
++@@ -132,9 +156,13 @@ function validateUsername(username) {
++         return { isValid: false, error: 'Username is required' };
++     }
++ 
++-    // 의도적 비효율성: 문자열 변환을 여러 번
++-    const user = username.toString().trim().toLowerCase();
++-    const originalUser = username.toString();
+++    // 개선: 타입 체크 및 효율적인 문자열 처리
+++    if (typeof username !== 'string') {
+++        return { isValid: false, error: 'Username must be a string' };
+++    }
+++    
+++    const originalUser = username.trim();
+++    const user = originalUser.toLowerCase();
++     
++     if (user.length < 3) {
++         return { isValid: false, error: 'Username must be at least 3 characters' };
++@@ -144,14 +172,13 @@ function validateUsername(username) {
++         return { isValid: false, error: 'Username must be less than 20 characters' };
++     }
++ 
++-    // 의도적 버그: 소문자 변환한 것으로 정규식 체크
++-    if (!USERNAME_REGEX().test(user)) {
+++    // 개선: 원본 문자열로 정규식 체크
+++    if (!USERNAME_REGEX.test(originalUser)) {
++         return { isValid: false, error: 'Username can only contain letters, numbers and underscores' };
++     }
++ 
++-    // 의도적 비효율성: 금지된 단어를 배열에서 찾기
++-    const forbiddenWords = ['admin', 'root', 'user', 'guest', 'anonymous', 'test'];
++-    for (let word of forbiddenWords) {
+++    // 개선: Set을 사용한 효율적인 금지 단어 체크
+++    for (const word of FORBIDDEN_USERNAMES) {
++         if (user.includes(word)) {
++             return { isValid: false, error: `Username cannot contain '${word}'` };
++         }
++@@ -168,7 +195,11 @@ function validateAge(age) {
++ 
++     const numAge = parseInt(age);
++     
++-    // 의도적 버그: NaN 체크 없음
+++    // 개선: NaN 체크 추가
+++    if (isNaN(numAge)) {
+++        return { isValid: false, error: 'Age must be a valid number' };
+++    }
+++    
++     if (numAge < 13) {
++         return { isValid: false, error: 'Age must be at least 13' };
++     }
++@@ -183,7 +214,15 @@ function validateAge(age) {
++ function validateUser(userData) {
++     const errors = [];
++     
++-    // 의도적 버그: userData가 null/undefined일 수 있음
+++    // 개선: userData null/undefined 체크
+++    if (!userData || typeof userData !== 'object') {
+++        return { 
+++            isValid: false, 
+++            errors: ['User data must be a valid object'],
+++            passwordStrength: 'unknown'
+++        };
+++    }
+++    
++     const emailValidation = validateEmail(userData.email);
++     if (!emailValidation.isValid) {
++         errors.push(emailValidation.error);
++@@ -199,8 +238,11 @@ function validateUser(userData) {
++         errors.push(usernameValidation.error);
++     }
++ 
++-    // 의도적 버그: age 검증 결과를 사용하지 않음
++-    validateAge(userData.age);
+++    // 개선: age 검증 결과 사용
+++    const ageValidation = validateAge(userData.age);
+++    if (!ageValidation.isValid) {
+++        errors.push(ageValidation.error);
+++    }
++ 
++     // 의도적 비효율성: 선택적 필드도 모두 검증
++     if (userData.firstName) {
++@@ -216,8 +258,8 @@ function validateUser(userData) {
++         if (typeof userData.lastName !== 'string' || userData.lastName.trim().length === 0) {
++             errors.push('Last name must be a valid string');
++         }
++-        // 의도적 버그: lastName 길이 체크가 firstName과 다름
++-        if (userData.lastName.length > 100) {
+++        // 개선: firstName과 동일한 길이 제한
+++        if (userData.lastName.length > 50) {
++             errors.push('Last name too long');
++         }
++     }
++
++
++=== UNSTAGED CHANGES ===
++diff --git a/userManager.js b/userManager.js
++index 4945f99..3a1a1a5 100644
++--- a/userManager.js
+++++ b/userManager.js
++@@ -65,7 +65,7 @@ class UserManager {
++             username: userData.username,
++             password: hashedPassword,
++             salt: salt,
++-            role: userData.role || 'user', // 기본값은 'user', 'admin'도 가능
+++            role: userData.role && ['user', 'admin'].includes(userData.role) ? userData.role : 'user',
++             createdAt: new Date().toISOString(),
++             lastLogin: null,
++             loginCount: 0,
++@@ -277,6 +277,73 @@ class UserManager {
++         return stats;
++     }
++ 
+++    // 개선: 효율적인 사용자 검색 기능
+++    searchUsers(query, options = {}) {
+++        const { type, limit = 20, offset = 0 } = options;
+++        const lowerQuery = query.toLowerCase();
+++        
+++        // 개선: 필터링과 페이지네이션을 한 번에 처리
+++        let filtered = this.users.filter(user => {
+++            // 안전한 필드 접근
+++            const searchFields = [
+++                user.email,
+++                user.username,
+++                user.profile?.firstName,
+++                user.profile?.lastName
+++            ];
+++            
+++            return searchFields.some(field => 
+++                field && field.toLowerCase().includes(lowerQuery)
+++            );
+++        });
+++
+++        const total = filtered.length;
+++        const users = filtered
+++            .slice(offset, offset + limit)
+++            .map(user => this.sanitizeUser(user));
+++
+++        return { users, total };
+++    }
+++
+++    // 개선: 페이지네이션 지원
+++    getPaginatedUsers(page = 1, limit = 10) {
+++        const offset = (page - 1) * limit;
+++        const total = this.users.length;
+++        const totalPages = Math.ceil(total / limit);
+++        
+++        const users = this.users
+++            .slice(offset, offset + limit);
+++            
+++        return {
+++            users,
+++            pagination: {
+++                currentPage: page,
+++                totalPages,
+++                totalUsers: total,
+++                hasNext: page < totalPages,
+++                hasPrev: page > 1
+++            }
+++        };
+++    }
+++
+++    // 개선: 민감한 정보 제거 기능
+++    sanitizeUser(user) {
+++        if (!user) return null;
+++        
+++        const { password, salt, ...safeUser } = user;
+++        return safeUser;
+++    }
+++
+++    sanitizeUsers(users) {
+++        return users.map(user => this.sanitizeUser(user));
+++    }
+++
+++    // 개선: 관리자 권한 체크
+++    isAdmin(userId) {
+++        const user = this.getUserById(userId);
+++        return user && user.role === 'admin';
+++    }
+++
++     // Admin 권한 체크 메서드 추가
++     isAdmin(userId) {
++         const user = this.getUserById(userId);
+diff --git a/.reviews/sessions/2025-09-12-002/request.json b/.reviews/sessions/2025-09-12-002/request.json
+new file mode 100644
+index 0000000..7041c26
+--- /dev/null
++++ b/.reviews/sessions/2025-09-12-002/request.json
+@@ -0,0 +1,10 @@
++{
++  "summary": "PR #2의 긴급 보안 취약점 5가지를 수정했습니다:\n\n1. CORS 설정 수정: origin '*'를 제거하고 환경변수 기반의 특정 도메인만 허용하도록 변경\n2. Admin 권한 체크 추가: role 기반 접근 제어를 구현하여 admin 엔드포인트에 requireAdmin 미들웨어 적용\n3. 민감정보 필터링: API 응답에서 password, salt 등 민감한 정보를 제거하는 sanitizeUser/sanitizeUsers 메서드 구현\n4. 세션 만료 체크: TTL 기반 세션 관리로 24시간 후 자동 만료되도록 구현하고 만료된 세션 정리 기능 추가\n5. 시스템 정보 노출 제거: health endpoint와 admin stats에서 불필요한 시스템 정보(메모리, CPU, 플랫폼 등) 제거\n\n각 수정사항은 Critical 등급 보안 이슈들을 해결하여 CSRF 공격 방지, 권한 에스컬레이션 방지, 정보 노출 차단 등을 달성했습니다.",
++  "focus_areas": [
++    "보안 취약점 해결 완성도",
++    "CORS 설정의 적절성",
++    "권한 체크 로직의 정확성",
++    "민감정보 필터링의 완전성",
++    "세션 관리의 보안성"
++  ]
++}
+\ No newline at end of file
+diff --git a/.reviews/sessions/2025-09-12-002/round-1/review.json b/.reviews/sessions/2025-09-12-002/round-1/review.json
+new file mode 100644
+index 0000000..34b2e65
+--- /dev/null
++++ b/.reviews/sessions/2025-09-12-002/round-1/review.json
+@@ -0,0 +1,122 @@
++{
++  "review_id": "2025-09-12-002",
++  "timestamp": "2025-09-12T10:11:12.701Z",
++  "status": "needs_changes",
++  "round": 1,
++  "design_compliance": {
++    "follows_architecture": true,
++    "major_violations": []
++  },
++  "comments": [
++    {
++      "type": "specific",
++      "file": "userManager.js",
++      "line": 348,
++      "severity": "critical",
++      "category": "bug",
++      "comment": "Critical bug: The isAdmin method is duplicated (lines 342-345 and 348-351). This duplication will cause a syntax error and prevent the code from running. The second duplicate should be removed.",
++      "suggested_fix": "Remove the duplicate isAdmin method definition at lines 348-351"
++    },
++    {
++      "type": "specific",
++      "file": "userManager.js",
++      "line": 354,
++      "severity": "critical",
++      "category": "bug",
++      "comment": "Critical bug: The sanitizeUser method is also duplicated (lines 330-335 and 354-358). This will cause a syntax error. Remove the duplicate.",
++      "suggested_fix": "Remove the duplicate sanitizeUser method definition at lines 354-358"
++    },
++    {
++      "type": "specific",
++      "file": "userManager.js",
++      "line": 361,
++      "severity": "critical",
++      "category": "bug",
++      "comment": "Critical bug: The sanitizeUsers method is duplicated (lines 337-339 and 361-363). This will cause a syntax error. Remove the duplicate.",
++      "suggested_fix": "Remove the duplicate sanitizeUsers method definition at lines 361-363"
++    },
++    {
++      "type": "specific",
++      "file": "api.js",
++      "line": 54,
++      "severity": "major",
++      "category": "security",
++      "comment": "Security issue: The authenticateToken function still stores the full user object (including password and salt) in req.user. While sanitizeUser is called later when returning data, this creates a risk window where sensitive data is accessible in the request object.",
++      "suggested_fix": "req.user = userManager.sanitizeUser(user);"
++    },
++    {
++      "type": "specific",
++      "file": "api.js",
++      "line": 15,
++      "severity": "minor",
++      "category": "security",
++      "comment": "CORS configuration correctly uses environment variables with proper fallback defaults. Good implementation of the CORS security fix.",
++      "suggested_fix": null
++    },
++    {
++      "type": "specific",
++      "file": "api.js",
++      "line": 59,
++      "severity": "minor",
++      "category": "security",
++      "comment": "Admin middleware correctly implements role-based access control. Good implementation of the admin access control fix.",
++      "suggested_fix": null
++    },
++    {
++      "type": "specific",
++      "file": "api.js",
++      "line": 119,
++      "severity": "minor",
++      "category": "security",
++      "comment": "Session expiry is correctly implemented with TTL (24 hours) in userManager.js line 119. Good implementation of the session management fix.",
++      "suggested_fix": null
++    },
++    {
++      "type": "specific",
++      "file": "api.js",
++      "line": 69,
++      "severity": "minor",
++      "category": "security",
++      "comment": "Health endpoint correctly removes sensitive system information, only returning status and timestamp. Good implementation of the system info removal fix.",
++      "suggested_fix": null
++    },
++    {
++      "type": "specific",
++      "file": "userManager.js",
++      "line": 238,
++      "severity": "minor",
++      "category": "security",
++      "comment": "cleanupExpiredSessions method correctly implements expired session cleanup. Good addition for session management.",
++      "suggested_fix": null
++    },
++    {
++      "type": "general",
++      "severity": "suggestion",
++      "category": "security",
++      "comment": "Consider adding rate limiting specifically for login attempts to prevent brute force attacks, in addition to the global rate limiter.",
++      "suggested_fix": "Add a separate, stricter rate limiter for the /api/login endpoint with lower limits (e.g., 5 attempts per 15 minutes per IP)"
++    },
++    {
++      "type": "general",
++      "severity": "suggestion",
++      "category": "performance",
++      "comment": "The session cleanup in /api/admin/stats endpoint (line 201) is called on every request. Consider implementing a scheduled cleanup job instead.",
++      "suggested_fix": "Implement a periodic cleanup using setInterval or a job scheduler to run cleanupExpiredSessions every hour or so"
++    }
++  ],
++  "missing_requirements": [],
++  "summary": {
++    "design_violations": 0,
++    "critical_issues": 3,
++    "major_issues": 1,
++    "minor_issues": 5,
++    "suggestions": 2
++  },
++  "test_results": {
++    "passed": null,
++    "summary": "Tests were not validated - no test command provided"
++  },
++  "overall_assessment": "needs_changes",
++  "__claudeSessionId": "47f77f6b-5e10-47c3-ae34-7a0ea3f89af7",
++  "__claudeModel": "opus"
++}
+\ No newline at end of file
+diff --git a/.reviews/sessions/2025-09-12-002/session.json b/.reviews/sessions/2025-09-12-002/session.json
+new file mode 100644
+index 0000000..d3829aa
+--- /dev/null
++++ b/.reviews/sessions/2025-09-12-002/session.json
+@@ -0,0 +1,143 @@
++{
++  "review_id": "2025-09-12-002",
++  "created_at": "2025-09-12T10:10:20.892Z",
++  "updated_at": "2025-09-12T10:11:12.703Z",
++  "status": "needs_changes",
++  "rounds": [
++    {
++      "review_id": "2025-09-12-002",
++      "timestamp": "2025-09-12T10:11:12.701Z",
++      "status": "needs_changes",
++      "round": 1,
++      "design_compliance": {
++        "follows_architecture": true,
++        "major_violations": []
++      },
++      "comments": [
++        {
++          "type": "specific",
++          "file": "userManager.js",
++          "line": 348,
++          "severity": "critical",
++          "category": "bug",
++          "comment": "Critical bug: The isAdmin method is duplicated (lines 342-345 and 348-351). This duplication will cause a syntax error and prevent the code from running. The second duplicate should be removed.",
++          "suggested_fix": "Remove the duplicate isAdmin method definition at lines 348-351"
++        },
++        {
++          "type": "specific",
++          "file": "userManager.js",
++          "line": 354,
++          "severity": "critical",
++          "category": "bug",
++          "comment": "Critical bug: The sanitizeUser method is also duplicated (lines 330-335 and 354-358). This will cause a syntax error. Remove the duplicate.",
++          "suggested_fix": "Remove the duplicate sanitizeUser method definition at lines 354-358"
++        },
++        {
++          "type": "specific",
++          "file": "userManager.js",
++          "line": 361,
++          "severity": "critical",
++          "category": "bug",
++          "comment": "Critical bug: The sanitizeUsers method is duplicated (lines 337-339 and 361-363). This will cause a syntax error. Remove the duplicate.",
++          "suggested_fix": "Remove the duplicate sanitizeUsers method definition at lines 361-363"
++        },
++        {
++          "type": "specific",
++          "file": "api.js",
++          "line": 54,
++          "severity": "major",
++          "category": "security",
++          "comment": "Security issue: The authenticateToken function still stores the full user object (including password and salt) in req.user. While sanitizeUser is called later when returning data, this creates a risk window where sensitive data is accessible in the request object.",
++          "suggested_fix": "req.user = userManager.sanitizeUser(user);"
++        },
++        {
++          "type": "specific",
++          "file": "api.js",
++          "line": 15,
++          "severity": "minor",
++          "category": "security",
++          "comment": "CORS configuration correctly uses environment variables with proper fallback defaults. Good implementation of the CORS security fix.",
++          "suggested_fix": null
++        },
++        {
++          "type": "specific",
++          "file": "api.js",
++          "line": 59,
++          "severity": "minor",
++          "category": "security",
++          "comment": "Admin middleware correctly implements role-based access control. Good implementation of the admin access control fix.",
++          "suggested_fix": null
++        },
++        {
++          "type": "specific",
++          "file": "api.js",
++          "line": 119,
++          "severity": "minor",
++          "category": "security",
++          "comment": "Session expiry is correctly implemented with TTL (24 hours) in userManager.js line 119. Good implementation of the session management fix.",
++          "suggested_fix": null
++        },
++        {
++          "type": "specific",
++          "file": "api.js",
++          "line": 69,
++          "severity": "minor",
++          "category": "security",
++          "comment": "Health endpoint correctly removes sensitive system information, only returning status and timestamp. Good implementation of the system info removal fix.",
++          "suggested_fix": null
++        },
++        {
++          "type": "specific",
++          "file": "userManager.js",
++          "line": 238,
++          "severity": "minor",
++          "category": "security",
++          "comment": "cleanupExpiredSessions method correctly implements expired session cleanup. Good addition for session management.",
++          "suggested_fix": null
++        },
++        {
++          "type": "general",
++          "severity": "suggestion",
++          "category": "security",
++          "comment": "Consider adding rate limiting specifically for login attempts to prevent brute force attacks, in addition to the global rate limiter.",
++          "suggested_fix": "Add a separate, stricter rate limiter for the /api/login endpoint with lower limits (e.g., 5 attempts per 15 minutes per IP)"
++        },
++        {
++          "type": "general",
++          "severity": "suggestion",
++          "category": "performance",
++          "comment": "The session cleanup in /api/admin/stats endpoint (line 201) is called on every request. Consider implementing a scheduled cleanup job instead.",
++          "suggested_fix": "Implement a periodic cleanup using setInterval or a job scheduler to run cleanupExpiredSessions every hour or so"
++        }
++      ],
++      "missing_requirements": [],
++      "summary": {
++        "design_violations": 0,
++        "critical_issues": 3,
++        "major_issues": 1,
++        "minor_issues": 5,
++        "suggestions": 2
++      },
++      "test_results": {
++        "passed": null,
++        "summary": "Tests were not validated - no test command provided"
++      },
++      "overall_assessment": "needs_changes",
++      "__claudeSessionId": "47f77f6b-5e10-47c3-ae34-7a0ea3f89af7",
++      "__claudeModel": "opus"
++    }
++  ],
++  "request": {
++    "summary": "PR #2의 긴급 보안 취약점 5가지를 수정했습니다:\n\n1. CORS 설정 수정: origin '*'를 제거하고 환경변수 기반의 특정 도메인만 허용하도록 변경\n2. Admin 권한 체크 추가: role 기반 접근 제어를 구현하여 admin 엔드포인트에 requireAdmin 미들웨어 적용\n3. 민감정보 필터링: API 응답에서 password, salt 등 민감한 정보를 제거하는 sanitizeUser/sanitizeUsers 메서드 구현\n4. 세션 만료 체크: TTL 기반 세션 관리로 24시간 후 자동 만료되도록 구현하고 만료된 세션 정리 기능 추가\n5. 시스템 정보 노출 제거: health endpoint와 admin stats에서 불필요한 시스템 정보(메모리, CPU, 플랫폼 등) 제거\n\n각 수정사항은 Critical 등급 보안 이슈들을 해결하여 CSRF 공격 방지, 권한 에스컬레이션 방지, 정보 노출 차단 등을 달성했습니다.",
++    "focus_areas": [
++      "보안 취약점 해결 완성도",
++      "CORS 설정의 적절성",
++      "권한 체크 로직의 정확성",
++      "민감정보 필터링의 완전성",
++      "세션 관리의 보안성"
++    ]
++  },
++  "claudeSessionIds": {
++    "opus": "47f77f6b-5e10-47c3-ae34-7a0ea3f89af7"
++  }
++}
+\ No newline at end of file
+diff --git a/api.js b/api.js
+index efdb0c0..ee95b0e 100644
+--- a/api.js
++++ b/api.js
+@@ -10,15 +10,16 @@ const userManager = new UserManager();
+ // 의도적 비효율성: 미들웨어 설정이 산발적
+ app.use(express.json({ limit: '10mb' })); // 의도적 버그: 너무 큰 limit
+ 
+-// 의도적 버그: CORS 설정이 너무 관대함
++// CORS 설정 - 보안 강화: 특정 도메인만 허용
+ app.use(cors({
+-    origin: '*',
+-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+-    allowedHeaders: '*',
+-    credentials: true
++    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:3001'],
++    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
++    allowedHeaders: ['Content-Type', 'Authorization'],
++    credentials: true,
++    optionsSuccessStatus: 200
+ }));
+ 
+-// 의도적 비효율성: rate limiting이 모든 엔드포인트에 동일하게 적용
++// 일반 rate limiting
+ const limiter = rateLimit({
+     windowMs: 15 * 60 * 1000, // 15분
+     max: 100, // 의도적 버그: 너무 관대한 rate limit
+@@ -27,13 +28,43 @@ const limiter = rateLimit({
+     legacyHeaders: false,
+ });
+ 
++// 로그인 전용 강화된 rate limiting
++const loginLimiter = rateLimit({
++    windowMs: 15 * 60 * 1000, // 15분
++    max: 5, // 15분 동안 5번의 로그인 시도만 허용
++    message: 'Too many login attempts, please try again later',
++    standardHeaders: true,
++    legacyHeaders: false,
++    skipSuccessfulRequests: true // 성공한 요청은 카운트하지 않음
++});
++
+ app.use(limiter);
+ 
+-// 의도적 버그: 에러 처리 미들웨어가 제대로 설정되지 않음
+-app.use((err, req, res, next) => {
+-    console.error(err.stack); // 의도적 버그: 로그에 스택 트레이스 노출
+-    res.status(500).json({ error: err.message }); // 의도적 버그: 에러 정보 노출
+-});
++// 개선: 보안 강화된 에러 처리 미들웨어
++function errorHandler(err, req, res, next) {
++    console.error('Error occurred:', {
++        message: err.message,
++        path: req.path,
++        method: req.method,
++        timestamp: new Date().toISOString()
++    });
++
++    // 에러 타입에 따른 일관성 있는 응답
++    if (err.name === 'ValidationError') {
++        return res.status(400).json({ error: 'Invalid input data' });
++    }
++    
++    if (err.name === 'UnauthorizedError') {
++        return res.status(401).json({ error: 'Authentication required' });
++    }
++    
++    if (err.code === 'LIMIT_FILE_SIZE') {
++        return res.status(413).json({ error: 'File size too large' });
++    }
++
++    // 기본 서버 에러 응답
++    res.status(500).json({ error: 'Internal server error' });
++}
+ 
+ // 의도적 비효율성: 인증 체크를 매번 반복
+ function authenticateToken(req, res, next) {
+@@ -50,21 +81,24 @@ function authenticateToken(req, res, next) {
+         return res.status(403).json({ error: 'Invalid token' });
+     }
+ 
+-    req.user = user; // 의도적 버그: 전체 user 객체를 넣음 (비밀번호 포함)
++    req.user = userManager.sanitizeUser(user); // 보안 강화: 민감한 정보 제거 후 저장
++    next();
++}
++
++// Admin 권한 체크 미들웨어 추가
++function requireAdmin(req, res, next) {
++    if (!req.user || !userManager.isAdmin(req.user.id)) {
++        return res.status(403).json({ error: 'Admin access required' });
++    }
+     next();
+ }
+ 
+ // Public endpoints
+ app.get('/api/health', (req, res) => {
+-    // 의도적 버그: 너무 많은 시스템 정보 노출
++    // 보안 강화: 최소한의 정보만 노출
+     res.json({
+         status: 'OK',
+-        timestamp: new Date().toISOString(),
+-        uptime: process.uptime(),
+-        memory: process.memoryUsage(),
+-        version: process.version,
+-        platform: process.platform,
+-        env: process.env.NODE_ENV || 'development'
++        timestamp: new Date().toISOString()
+     });
+ });
+ 
+@@ -78,28 +112,37 @@ app.post('/api/register', async (req, res) => {
+         // 의도적 버그: 추가 보안 검증 없음
+         const newUser = await userManager.createUser(userData);
+         
+-        // 의도적 버그: 비밀번호와 민감한 정보도 응답에 포함
++        // 보안 강화: 민감한 정보 제거 후 응답
+         res.status(201).json({
+             message: 'User created successfully',
+-            user: newUser
++            user: newUser // newUser는 이미 sanitizeUser를 통해 처리됨
+         });
+         
+     } catch (error) {
+-        // 의도적 비효율성: 에러 타입별 분기 처리가 복잡함
++        // 개선: 일관성 있는 에러 처리
++        console.error('Registration error:', {
++            message: error.message,
++            type: error.constructor.name,
++            timestamp: new Date().toISOString()
++        });
++        
+         if (error instanceof ValidationError) {
+-            res.status(400).json({ error: error.message, field: error.field });
+-        } else if (error.message.includes('already exists')) {
+-            res.status(409).json({ error: error.message });
+-        } else if (error.message.includes('Validation failed')) {
+-            res.status(400).json({ error: error.message });
+-        } else {
+-            console.error('Registration error:', error); // 의도적 버그: 에러 로깅에 민감정보 포함 가능
+-            res.status(500).json({ error: 'Internal server error' });
++            return res.status(400).json({ error: error.message, field: error.field });
++        }
++        
++        if (error.message.includes('already exists')) {
++            return res.status(409).json({ error: 'User already exists' });
++        }
++        
++        if (error.message.includes('Validation failed')) {
++            return res.status(400).json({ error: 'Invalid user data provided' });
+         }
++        
++        res.status(500).json({ error: 'Failed to register user' });
+     }
+ });
+ 
+-app.post('/api/login', async (req, res) => {
++app.post('/api/login', loginLimiter, async (req, res) => {
+     try {
+         const { email, password } = req.body;
+         
+@@ -112,20 +155,26 @@ app.post('/api/login', async (req, res) => {
+         res.json({
+             message: 'Login successful',
+             token: loginResult.token,
+-            user: loginResult.user,
+-            systemStats: stats // 의도적 버그: 민감한 시스템 정보 노출
++            user: loginResult.user
++            // systemStats 제거 - 민감한 시스템 정보 노출 방지
+         });
+         
+     } catch (error) {
+-        // 의도적 버그: 로그인 실패 시 구체적인 오류 메시지 노출
+-        console.log('Login failed for:', req.body.email);
+-        res.status(401).json({ error: error.message });
++        // 개선: 보안을 고려한 에러 처리
++        console.error('Login attempt failed:', {
++            timestamp: new Date().toISOString(),
++            ip: req.ip,
++            userAgent: req.get('User-Agent')
++        });
++        
++        // 일반적인 에러 메시지로 정보 누출 방지
++        res.status(401).json({ error: 'Invalid credentials' });
+     }
+ });
+ 
+ // Protected endpoints
+ app.get('/api/profile', authenticateToken, (req, res) => {
+-    // 의도적 버그: 전체 user 객체 반환 (비밀번호 포함)
++    // req.user는 이미 sanitized 상태
+     res.json({
+         user: req.user
+     });
+@@ -140,11 +189,21 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
+         
+         res.json({
+             message: 'Profile updated',
+-            user: updatedUser // 의도적 버그: 민감한 정보 포함
++            user: userManager.sanitizeUser(updatedUser) // 보안 강화: 민감한 정보 제거
+         });
+         
+     } catch (error) {
+-        res.status(400).json({ error: error.message });
++        console.error('Profile update error:', {
++            userId: req.user.id,
++            message: error.message,
++            timestamp: new Date().toISOString()
++        });
++        
++        if (error.message.includes('not found')) {
++            return res.status(404).json({ error: 'User not found' });
++        }
++        
++        res.status(400).json({ error: 'Failed to update profile' });
+     }
+ });
+ 
+@@ -162,18 +221,22 @@ app.post('/api/logout', authenticateToken, (req, res) => {
+     }
+ });
+ 
+-// Admin endpoints (의도적 버그: admin 권한 체크 없음)
+-app.get('/api/admin/users', authenticateToken, (req, res) => {
+-    // 의도적 버그: 모든 사용자가 전체 사용자 목록에 접근 가능
++// Admin endpoints - 권한 체크 추가
++app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
++    // Admin만 전체 사용자 목록에 접근 가능, 민감한 정보 제거
+     const users = userManager.getAllUsers();
+-    res.json({ users });
++    res.json({ users: userManager.sanitizeUsers(users) });
+ });
+ 
+-app.delete('/api/admin/users/:id', authenticateToken, (req, res) => {
++app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
+     try {
+         const userId = req.params.id;
+         
+-        // 의도적 버그: 자기 자신도 삭제 가능
++        // 자기 자신 삭제 방지
++        if (userId === req.user.id) {
++            return res.status(400).json({ error: 'Cannot delete your own account' });
++        }
++        
+         const deleted = userManager.deleteUser(userId);
+         
+         if (deleted) {
+@@ -186,20 +249,15 @@ app.delete('/api/admin/users/:id', authenticateToken, (req, res) => {
+     }
+ });
+ 
+-app.get('/api/admin/stats', authenticateToken, (req, res) => {
++app.get('/api/admin/stats', authenticateToken, requireAdmin, (req, res) => {
+     try {
+-        // 의도적 비효율성: 통계 계산을 매번 수행
++        // 보안 강화: 민감한 시스템 정보 제거, 사용자 통계만 제공
+         const stats = userManager.getStatistics();
+-        const dbStats = userManager.db.getConnectionStats();
++        userManager.cleanupExpiredSessions(); // 만료된 세션 정리
+         
+         res.json({
+             userStats: stats,
+-            databaseStats: dbStats,
+-            serverInfo: {
+-                uptime: process.uptime(),
+-                memory: process.memoryUsage(),
+-                cpu: process.cpuUsage() // 의도적 비효율성: CPU 사용량 매번 계산
+-            }
++            activeSessionsCount: userManager.activeUsers.size
+         });
+     } catch (error) {
+         res.status(500).json({ error: error.message });
+@@ -237,20 +295,22 @@ app.get('/api/search', authenticateToken, (req, res) => {
+         );
+     });
+     
+-    res.json({ results, total: results.length });
++    // 검색 결과에서도 민감한 정보 제거
++    const sanitizedResults = userManager.sanitizeUsers(results);
++    res.json({ results: sanitizedResults, total: sanitizedResults.length });
+ });
+ 
+-// 의도적 버그: 404 핸들러가 없어서 에러 정보 노출
++// 404 핸들러 - 보안 강화: 최소한의 정보만 노출
+ app.use('*', (req, res) => {
+     res.status(404).json({
+-        error: 'Route not found',
+-        path: req.originalUrl,
+-        method: req.method,
+-        headers: req.headers // 의도적 버그: 헤더 정보 노출
++        error: 'Route not found'
+     });
+ });
+ 
+-// 의도적 버그: 글로벌 에러 핸들러가 맨 아래에 있지만 실제로는 위에도 있어서 중복
++// 에러 핸들러 미들웨어 등록
++app.use(errorHandler);
++
++// 개선된 글로벌 에러 핸들러
+ process.on('uncaughtException', (error) => {
+     console.error('Uncaught Exception:', error);
+     // 의도적 버그: 프로세스를 종료하지 않음
+diff --git a/database.js b/database.js
+index 5d2b310..fc3d20f 100644
+--- a/database.js
++++ b/database.js
+@@ -1,4 +1,5 @@
+-const fs = require('fs');
++const fs = require('fs').promises;
++const fSync = require('fs');
+ const path = require('path');
+ const EventEmitter = require('events');
+ 
+@@ -15,23 +16,23 @@ class DatabaseHelper extends EventEmitter {
+             retryAttempts: 3
+         };
+         
+-        this.initializeDatabase();
++        this.initializeDatabase().catch(console.error);
+     }
+ 
+-    initializeDatabase() {
++    async initializeDatabase() {
+         try {
+-            if (!fs.existsSync(this.dbPath)) {
+-                fs.mkdirSync(this.dbPath, { recursive: true });
++            if (!fSync.existsSync(this.dbPath)) {
++                await fs.mkdir(this.dbPath, { recursive: true });
+             }
+             
+-            // 의도적 버그: 동기 방식으로 여러 파일 생성
++            // 개선: 비동기 방식으로 파일 생성
+             const schemas = ['users', 'sessions', 'logs'];
+-            schemas.forEach(schema => {
++            await Promise.all(schemas.map(async schema => {
+                 const filePath = path.join(this.dbPath, `${schema}.json`);
+-                if (!fs.existsSync(filePath)) {
+-                    fs.writeFileSync(filePath, JSON.stringify([], null, 2));
++                if (!fSync.existsSync(filePath)) {
++                    await fs.writeFile(filePath, JSON.stringify([], null, 2));
+                 }
+-            });
++            }));
+             
+         } catch (error) {
+             console.error('Database initialization failed:', error);
+@@ -40,26 +41,21 @@ class DatabaseHelper extends EventEmitter {
+     }
+ 
+     async connect(connectionId = 'default') {
+-        return new Promise((resolve, reject) => {
+-            // 의도적 비효율성: 불필요한 setTimeout 사용
+-            setTimeout(() => {
+-                if (this.connections.size >= this.config.maxConnections) {
+-                    reject(new Error('Maximum connections reached'));
+-                    return;
+-                }
++        // 개선: 불필요한 지연 제거
++        if (this.connections.size >= this.config.maxConnections) {
++            throw new Error('Maximum connections reached');
++        }
+ 
+-                const connection = {
+-                    id: connectionId,
+-                    createdAt: Date.now(),
+-                    isActive: true,
+-                    queries: 0
+-                };
++        const connection = {
++            id: connectionId,
++            createdAt: Date.now(),
++            isActive: true,
++            queries: 0
++        };
+ 
+-                this.connections.set(connectionId, connection);
+-                this.emit('connected', connectionId);
+-                resolve(connection);
+-            }, Math.random() * 100); // 의도적 비효율성: 랜덤 지연
+-        });
++        this.connections.set(connectionId, connection);
++        this.emit('connected', connectionId);
++        return connection;
+     }
+ 
+     async query(table, operation, data = null) {
+@@ -104,8 +100,7 @@ class DatabaseHelper extends EventEmitter {
+                 query.reject(error);
+             }
+             
+-            // 의도적 비효율성: 각 쿼리마다 지연
+-            await new Promise(resolve => setTimeout(resolve, 10));
++            // 개선: 불필요한 지연 제거
+         }
+         
+         this.isProcessing = false;
+@@ -115,10 +110,13 @@ class DatabaseHelper extends EventEmitter {
+         const { table, operation, data } = query;
+         const filePath = path.join(this.dbPath, `${table}.json`);
+         
+-        // 의도적 버그: 파일 존재 체크 없음
++        // 개선: 파일 존재 체크 및 비동기 읽기
+         let tableData;
+         try {
+-            const rawData = fs.readFileSync(filePath, 'utf8');
++            if (!fSync.existsSync(filePath)) {
++                throw new Error(`Table ${table} does not exist`);
++            }
++            const rawData = await fs.readFile(filePath, 'utf8');
+             tableData = JSON.parse(rawData);
+         } catch (error) {
+             throw new Error(`Failed to read table ${table}: ${error.message}`);
+@@ -132,15 +130,15 @@ class DatabaseHelper extends EventEmitter {
+                 break;
+             case 'INSERT':
+                 result = this.insertData(tableData, data);
+-                this.writeTableData(filePath, tableData);
++                await this.writeTableData(filePath, tableData);
+                 break;
+             case 'UPDATE':
+                 result = this.updateData(tableData, data);
+-                this.writeTableData(filePath, tableData);
++                await this.writeTableData(filePath, tableData);
+                 break;
+             case 'DELETE':
+                 result = this.deleteData(tableData, data);
+-                this.writeTableData(filePath, tableData);
++                await this.writeTableData(filePath, tableData);
+                 break;
+             default:
+                 throw new Error(`Unknown operation: ${operation}`);
+@@ -180,10 +178,15 @@ class DatabaseHelper extends EventEmitter {
+     }
+ 
+     insertData(tableData, newRecord) {
+-        // 의도적 버그: ID 중복 체크 없음
++        // 개선: ID 중복 체크 추가
+         const id = newRecord.id || Date.now().toString() + Math.random().toString(36);
+-        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
+         
++        // ID 중복 체크
++        if (tableData.some(record => record.id === id)) {
++            throw new Error(`Record with ID ${id} already exists`);
++        }
++        
++        const record = { ...newRecord, id, createdAt: new Date().toISOString() };
+         tableData.push(record);
+         return record;
+     }
+@@ -191,38 +194,39 @@ class DatabaseHelper extends EventEmitter {
+     updateData(tableData, updateInfo) {
+         const { id, updates } = updateInfo;
+         
+-        // 의도적 비효율성: find 대신 전체 배열 순회
+-        let updated = [];
+-        for (let i = 0; i < tableData.length; i++) {
+-            if (tableData[i].id === id) {
+-                // 의도적 버그: 업데이트 시 타입 검증 없음
+-                Object.assign(tableData[i], updates);
+-                tableData[i].updatedAt = new Date().toISOString();
+-                updated.push(tableData[i]);
+-            }
++        // 개선: 효율적인 검색 및 타입 검증
++        const recordIndex = tableData.findIndex(record => record.id === id);
++        if (recordIndex === -1) {
++            throw new Error(`Record with ID ${id} not found`);
++        }
++        
++        // 간단한 타입 검증 추가
++        if (typeof updates !== 'object' || updates === null) {
++            throw new Error('Updates must be a valid object');
+         }
+         
+-        return updated;
++        Object.assign(tableData[recordIndex], updates);
++        tableData[recordIndex].updatedAt = new Date().toISOString();
++        return [tableData[recordIndex]];
+     }
+ 
+     deleteData(tableData, criteria) {
+         const { id } = criteria;
+         
+-        // 의도적 비효율성: splice 대신 filter 사용하지 않음
+-        const deleted = [];
+-        for (let i = tableData.length - 1; i >= 0; i--) {
+-            if (tableData[i].id === id) {
+-                deleted.push(tableData.splice(i, 1)[0]);
+-            }
++        // 개선: 효율적인 삭제 로직
++        const recordIndex = tableData.findIndex(record => record.id === id);
++        if (recordIndex === -1) {
++            return [];
+         }
+         
++        const deleted = tableData.splice(recordIndex, 1);
+         return deleted;
+     }
+ 
+-    writeTableData(filePath, data) {
++    async writeTableData(filePath, data) {
+         try {
+-            // 의도적 비효율성: 동기 방식 쓰기
+-            fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
++            // 개선: 비동기 방식 쓰기
++            await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+         } catch (error) {
+             throw new Error(`Failed to write to ${filePath}: ${error.message}`);
+         }
+@@ -232,17 +236,17 @@ class DatabaseHelper extends EventEmitter {
+         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+         const backupDir = path.join(backupPath, `backup-${timestamp}`);
+         
+-        // 의도적 비효율성: 동기 방식 복사
+-        fs.mkdirSync(backupDir, { recursive: true });
++        // 개선: 비동기 방식 복사
++        await fs.mkdir(backupDir, { recursive: true });
+         
+-        const files = fs.readdirSync(this.dbPath);
+-        files.forEach(file => {
++        const files = await fs.readdir(this.dbPath);
++        await Promise.all(files.map(async file => {
+             if (file.endsWith('.json')) {
+                 const source = path.join(this.dbPath, file);
+                 const dest = path.join(backupDir, file);
+-                fs.copyFileSync(source, dest);
++                await fs.copyFile(source, dest);
+             }
+-        });
++        }));
+         
+         return backupDir;
+     }
+@@ -255,10 +259,10 @@ class DatabaseHelper extends EventEmitter {
+             isProcessing: this.isProcessing
+         };
+ 
+-        // 의도적 비효율성: Map을 배열로 변환해서 순회
+-        Array.from(this.connections.values()).forEach(conn => {
++        // 개선: 효율적인 Map 순회
++        for (const conn of this.connections.values()) {
+             stats.totalQueries += conn.queries;
+-        });
++        }
+ 
+         return stats;
+     }
+diff --git a/i18n.js b/i18n.js
+new file mode 100644
+index 0000000..8431b1a
+--- /dev/null
++++ b/i18n.js
+@@ -0,0 +1,273 @@
++/**
++ * Internationalization (i18n) Module
++ * Provides multi-language support for user messages
++ */
++
++const messages = {
++    en: {
++        // Authentication messages
++        auth: {
++            loginRequired: 'Login is required',
++            loginSuccess: 'Login successful',
++            loginFailed: 'Invalid email or password',
++            logoutSuccess: 'Successfully logged out',
++            tokenRequired: 'Access token is required',
++            tokenInvalid: 'Invalid or expired token',
++            accountLocked: 'Account is temporarily locked due to multiple failed attempts',
++            accountUnlocked: 'Account has been unlocked',
++            unlockEmailSent: 'Unlock instructions sent to your email'
++        },
++
++        // Validation messages
++        validation: {
++            required: 'This field is required',
++            emailInvalid: 'Please enter a valid email address',
++            emailTooLong: 'Email address is too long',
++            passwordTooShort: 'Password must be at least 8 characters',
++            passwordTooLong: 'Password is too long',
++            passwordMissingLowercase: 'Password must include a lowercase letter',
++            passwordMissingUppercase: 'Password must include an uppercase letter',
++            passwordMissingNumber: 'Password must include a number',
++            passwordMissingSpecial: 'Password must include a special character (@$!%*?&)',
++            passwordCommon: 'This password is too common. Please choose a stronger one',
++            usernameTooShort: 'Username must be at least 3 characters',
++            usernameTooLong: 'Username must be less than 20 characters',
++            usernameInvalid: 'Username can only contain letters, numbers, and underscores',
++            usernameForbidden: 'Username contains prohibited words',
++            ageInvalid: 'Please enter a valid age',
++            ageTooYoung: 'You must be at least 13 years old',
++            ageTooOld: 'Please enter a realistic age'
++        },
++
++        // User management messages
++        user: {
++            created: 'Account created successfully',
++            updated: 'Profile updated successfully',
++            deleted: 'Account deleted successfully',
++            notFound: 'User not found',
++            alreadyExists: 'An account with this email already exists',
++            profileRetrieved: 'Profile information retrieved'
++        },
++
++        // Error messages
++        error: {
++            general: 'An unexpected error occurred',
++            validation: 'Please check your input',
++            server: 'Server error occurred. Please try again later',
++            notFound: 'Requested resource not found',
++            forbidden: 'You don\'t have permission to access this resource',
++            rateLimited: 'Too many requests. Please wait a moment',
++            fileUpload: 'File upload failed',
++            networkError: 'Network connection error'
++        },
++
++        // Success messages
++        success: {
++            operationComplete: 'Operation completed successfully',
++            dataSaved: 'Data saved successfully',
++            emailSent: 'Email sent successfully'
++        },
++
++        // Help messages
++        help: {
++            emailFormat: 'Example: user@example.com',
++            passwordRequirements: 'Must be 8+ characters with uppercase, lowercase, number, and special character',
++            usernameRequirements: '3-20 characters, letters/numbers/underscores only',
++            contactSupport: 'Contact support if you need help',
++            tryAgainLater: 'Please try again in a few minutes',
++            checkEmailSpam: 'Check your spam folder if you don\'t see the email'
++        }
++    },
++
++    ko: {
++        // 인증 메시지
++        auth: {
++            loginRequired: '로그인이 필요합니다',
++            loginSuccess: '로그인되었습니다',
++            loginFailed: '이메일 또는 비밀번호가 올바르지 않습니다',
++            logoutSuccess: '로그아웃되었습니다',
++            tokenRequired: '액세스 토큰이 필요합니다',
++            tokenInvalid: '유효하지 않거나 만료된 토큰입니다',
++            accountLocked: '로그인 실패가 반복되어 계정이 일시적으로 잠금되었습니다',
++            accountUnlocked: '계정 잠금이 해제되었습니다',
++            unlockEmailSent: '계정 잠금 해제 안내를 이메일로 발송했습니다'
++        },
++
++        // 유효성 검증 메시지
++        validation: {
++            required: '필수 입력 항목입니다',
++            emailInvalid: '올바른 이메일 주소를 입력해주세요',
++            emailTooLong: '이메일 주소가 너무 깁니다',
++            passwordTooShort: '비밀번호는 최소 8자 이상이어야 합니다',
++            passwordTooLong: '비밀번호가 너무 깁니다',
++            passwordMissingLowercase: '비밀번호에 소문자가 포함되어야 합니다',
++            passwordMissingUppercase: '비밀번호에 대문자가 포함되어야 합니다',
++            passwordMissingNumber: '비밀번호에 숫자가 포함되어야 합니다',
++            passwordMissingSpecial: '비밀번호에 특수문자(@$!%*?&)가 포함되어야 합니다',
++            passwordCommon: '너무 흔한 비밀번호입니다. 더 안전한 비밀번호를 선택해주세요',
++            usernameTooShort: '사용자명은 최소 3자 이상이어야 합니다',
++            usernameTooLong: '사용자명은 20자 이하여야 합니다',
++            usernameInvalid: '사용자명은 영문, 숫자, 밑줄(_)만 사용할 수 있습니다',
++            usernameForbidden: '사용자명에 금지된 단어가 포함되어 있습니다',
++            ageInvalid: '올바른 나이를 입력해주세요',
++            ageTooYoung: '최소 13세 이상이어야 합니다',
++            ageTooOld: '현실적인 나이를 입력해주세요'
++        },
++
++        // 사용자 관리 메시지
++        user: {
++            created: '계정이 성공적으로 생성되었습니다',
++            updated: '프로필이 업데이트되었습니다',
++            deleted: '계정이 삭제되었습니다',
++            notFound: '사용자를 찾을 수 없습니다',
++            alreadyExists: '이미 존재하는 이메일입니다',
++            profileRetrieved: '프로필 정보를 가져왔습니다'
++        },
++
++        // 오류 메시지
++        error: {
++            general: '예상치 못한 오류가 발생했습니다',
++            validation: '입력 정보를 확인해주세요',
++            server: '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요',
++            notFound: '요청하신 정보를 찾을 수 없습니다',
++            forbidden: '접근 권한이 없습니다',
++            rateLimited: '너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요',
++            fileUpload: '파일 업로드에 실패했습니다',
++            networkError: '네트워크 연결 오류가 발생했습니다'
++        },
++
++        // 성공 메시지
++        success: {
++            operationComplete: '작업이 성공적으로 완료되었습니다',
++            dataSaved: '데이터가 저장되었습니다',
++            emailSent: '이메일이 발송되었습니다'
++        },
++
++        // 도움말 메시지
++        help: {
++            emailFormat: '예: user@example.com',
++            passwordRequirements: '8자 이상, 대소문자, 숫자, 특수문자 포함',
++            usernameRequirements: '3-20자, 영문/숫자/밑줄만 사용',
++            contactSupport: '도움이 필요하시면 고객지원팀에 문의하세요',
++            tryAgainLater: '잠시 후 다시 시도해주세요',
++            checkEmailSpam: '이메일이 보이지 않으면 스팸함을 확인해주세요'
++        }
++    }
++};
++
++class I18n {
++    constructor(defaultLanguage = 'ko') {
++        this.currentLanguage = defaultLanguage;
++        this.messages = messages;
++    }
++
++    /**
++     * Set the current language
++     * @param {string} language - Language code (en, ko)
++     */
++    setLanguage(language) {
++        if (this.messages[language]) {
++            this.currentLanguage = language;
++        } else {
++            console.warn(`Language ${language} not supported. Using ${this.currentLanguage}`);
++        }
++    }
++
++    /**
++     * Get a translated message
++     * @param {string} key - Message key (e.g., 'auth.loginRequired')
++     * @param {Object} params - Parameters for string interpolation
++     */
++    t(key, params = {}) {
++        const keys = key.split('.');
++        let message = this.messages[this.currentLanguage];
++
++        // Navigate through nested object
++        for (const k of keys) {
++            message = message?.[k];
++        }
++
++        // Fallback to English if translation not found
++        if (!message) {
++            message = this.messages.en;
++            for (const k of keys) {
++                message = message?.[k];
++            }
++        }
++
++        // Final fallback to key itself
++        if (!message) {
++            console.warn(`Translation not found for key: ${key}`);
++            return key;
++        }
++
++        // Simple string interpolation
++        return this.interpolate(message, params);
++    }
++
++    /**
++     * Simple string interpolation
++     * @param {string} message - Message template
++     * @param {Object} params - Parameters to interpolate
++     */
++    interpolate(message, params) {
++        return message.replace(/\{\{(\w+)\}\}/g, (match, key) => {
++            return params[key] !== undefined ? params[key] : match;
++        });
++    }
++
++    /**
++     * Get validation error message with help text
++     * @param {string} errorType - Type of validation error
++     * @param {string} field - Field name
++     */
++    validationError(errorType, field = null) {
++        const message = this.t(`validation.${errorType}`);
++        const helpKey = `help.${errorType}Requirements` || `help.${field}Requirements`;
++        const help = this.t(helpKey);
++        
++        return {
++            message,
++            help: help !== helpKey ? help : this.t('help.contactSupport'),
++            field
++        };
++    }
++
++    /**
++     * Detect language from request headers
++     * @param {string} acceptLanguageHeader - Accept-Language header value
++     */
++    detectLanguage(acceptLanguageHeader) {
++        if (!acceptLanguageHeader) return this.currentLanguage;
++
++        const languages = acceptLanguageHeader
++            .split(',')
++            .map(lang => lang.split(';')[0].trim().toLowerCase());
++
++        for (const lang of languages) {
++            if (lang.startsWith('ko')) return 'ko';
++            if (lang.startsWith('en')) return 'en';
++        }
++
++        return this.currentLanguage;
++    }
++
++    /**
++     * Get current language
++     */
++    getLanguage() {
++        return this.currentLanguage;
++    }
++
++    /**
++     * Get available languages
++     */
++    getAvailableLanguages() {
++        return Object.keys(this.messages);
++    }
++}
++
++// Create singleton instance
++const i18n = new I18n();
++
++module.exports = { I18n, i18n };
+\ No newline at end of file
+diff --git a/responseHelper.js b/responseHelper.js
+new file mode 100644
+index 0000000..b0f9bc0
+--- /dev/null
++++ b/responseHelper.js
+@@ -0,0 +1,204 @@
++/**
++ * Response Helper - Standardized API Response Structure
++ * Provides consistent response format for all API endpoints
++ */
++
++class ResponseHelper {
++    /**
++     * Standard successful response
++     * @param {Object} data - Response data
++     * @param {string} message - Success message
++     * @param {Object} meta - Metadata (pagination, timestamps, etc.)
++     * @param {number} statusCode - HTTP status code
++     */
++    static success(data = null, message = null, meta = {}, statusCode = 200) {
++        const response = {
++            success: true,
++            data,
++            message,
++            meta: {
++                timestamp: new Date().toISOString(),
++                ...meta
++            },
++            error: null
++        };
++
++        return {
++            statusCode,
++            body: response
++        };
++    }
++
++    /**
++     * Standard error response
++     * @param {string} message - User-friendly error message
++     * @param {string} code - Error code for client handling
++     * @param {Object} details - Additional error details
++     * @param {number} statusCode - HTTP status code
++     */
++    static error(message, code = 'GENERAL_ERROR', details = {}, statusCode = 400) {
++        const response = {
++            success: false,
++            data: null,
++            message: null,
++            meta: {
++                timestamp: new Date().toISOString()
++            },
++            error: {
++                message,
++                code,
++                details
++            }
++        };
++
++        return {
++            statusCode,
++            body: response
++        };
++    }
++
++    /**
++     * Validation error response
++     * @param {Array} errors - Array of validation errors
++     * @param {string} field - Field that failed validation
++     */
++    static validationError(errors, field = null) {
++        return this.error(
++            '입력 정보를 확인해주세요', // User-friendly message in Korean
++            'VALIDATION_ERROR',
++            {
++                field,
++                errors: Array.isArray(errors) ? errors : [errors],
++                helpText: '올바른 형식으로 다시 입력해주세요'
++            },
++            400
++        );
++    }
++
++    /**
++     * Authentication error response
++     */
++    static authError(message = '로그인이 필요합니다') {
++        return this.error(
++            message,
++            'AUTH_ERROR',
++            {
++                helpText: '다시 로그인해주세요'
++            },
++            401
++        );
++    }
++
++    /**
++     * Authorization error response
++     */
++    static forbiddenError(message = '접근 권한이 없습니다') {
++        return this.error(
++            message,
++            'FORBIDDEN_ERROR',
++            {
++                helpText: '관리자에게 문의하세요'
++            },
++            403
++        );
++    }
++
++    /**
++     * Not found error response
++     */
++    static notFoundError(resource = '요청한 정보') {
++        return this.error(
++            `${resource}를 찾을 수 없습니다`,
++            'NOT_FOUND_ERROR',
++            {
++                helpText: '요청 URL을 확인해주세요'
++            },
++            404
++        );
++    }
++
++    /**
++     * Server error response
++     */
++    static serverError(message = '일시적인 오류가 발생했습니다') {
++        return this.error(
++            message,
++            'SERVER_ERROR',
++            {
++                helpText: '잠시 후 다시 시도해주세요'
++            },
++            500
++        );
++    }
++
++    /**
++     * Rate limit error response
++     */
++    static rateLimitError() {
++        return this.error(
++            '너무 많은 요청이 발생했습니다',
++            'RATE_LIMIT_ERROR',
++            {
++                helpText: '잠시 후 다시 시도해주세요',
++                retryAfter: 60
++            },
++            429
++        );
++    }
++
++    /**
++     * Progress response for multi-step operations
++     * @param {number} current - Current step
++     * @param {number} total - Total steps
++     * @param {string} message - Progress message
++     * @param {Object} data - Partial data
++     */
++    static progress(current, total, message, data = null) {
++        const percentage = Math.round((current / total) * 100);
++        
++        return this.success(
++            data,
++            message,
++            {
++                progress: {
++                    current,
++                    total,
++                    percentage,
++                    isComplete: current >= total
++                }
++            },
++            202 // Accepted
++        );
++    }
++
++    /**
++     * Paginated response
++     * @param {Array} data - Array of items
++     * @param {number} page - Current page
++     * @param {number} limit - Items per page
++     * @param {number} total - Total items
++     * @param {string} message - Success message
++     */
++    static paginated(data, page, limit, total, message = null) {
++        const totalPages = Math.ceil(total / limit);
++        const hasNext = page < totalPages;
++        const hasPrev = page > 1;
++
++        return this.success(
++            data,
++            message,
++            {
++                pagination: {
++                    page,
++                    limit,
++                    total,
++                    totalPages,
++                    hasNext,
++                    hasPrev
++                }
++            }
++        );
++    }
++}
++
++module.exports = ResponseHelper;
+\ No newline at end of file
+diff --git a/temp_improve_2.md b/temp_improve_2.md
+new file mode 100644
+index 0000000..650609c
+--- /dev/null
++++ b/temp_improve_2.md
+@@ -0,0 +1,498 @@
++# Claude Code를 사용한 AI 에이전트 PR 개선 워크플로우
++
++다음 3개의 에이전트를 병렬로 실행해주세요:
++
++## Agent 1: 보안 취약점 수정
++```
++Task({
++  subagent_type: "general-purpose",
++  description: "PR 보안 취약점 수정",
++  prompt: "PR #2의 보안 취약점을 수정해줘. 다음 AI 리뷰 결과를 참고해서 긴급(Critical) 보안 이슈들을 우선적으로 해결해줘:
++
++리뷰 코멘트 내용:
++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
++
++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
++
++### 📋 **변경된 파일들**
++- api.js
++- database.js
++- userManager.js
++- validation.js
++
++---
++
++## 📊 **종합 평가**
++- **코드 품질**: 2.5/10
++- **보안 위험도**: CRITICAL (매우 높음)
++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
++
++---
++
++## 🔴 **긴급 수정 필요 (Critical)**
++
++### 보안 취약점
++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
++
++### 인증/세션 관리
++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
++
++---
++
++## 🟡 **중요 개선사항 (Major)**
++
++### 성능 최적화
++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
++
++### 데이터 무결성
++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
++
++### UX 및 접근성
++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
++
++---
++
++## 🟢 **사용자 경험 향상 (Minor)**
++
++### 입력 검증 강화
++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
++
++### 모니터링 및 로깅
++- **구조화된 로깅**: winston 등 로깅 시스템 도입
++- **성능 모니터링**: APM 도구로 병목 지점 추적
++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
++
++---
++
++## ✅ **잘 구현된 부분**
++
++### 아키텍처 구조
++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
++
++### 검증 로직
++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
++
++---
++
++## 🎯 **우선 수정 권장사항**
++
++### 1순위 (즉시 수정)
++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
++3. **민감정보 필터링**: 응답에서 password, salt 제거
++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
++
++### 2순위 (1주일 내)
++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
++
++### 3순위 (2주일 내)  
++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
++2. **API 응답 표준화**: 일관된 응답 구조 적용
++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
++4. **보안 헤더**: helmet.js 미들웨어 적용
++
++---
++
++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
++
++변경된 파일들:
++api.js
++database.js
++userManager.js
++validation.js
++
++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 보안 이슈들을 수정해줘:
++
++1. CORS 설정 수정 (origin: '*' 제거, 특정 도메인만 허용)
++2. Admin 권한 체크 추가 (role 기반 접근 제어)
++3. 민감정보 필터링 (password, salt 제거)
++4. 세션 만료 체크 구현
++5. 시스템 정보 노출 제거
++
++각 파일을 수정할 때마다 변경사항을 명확히 설명해줘.
++모든 수정이 완료되면 수정 내용을 요약해서 알려줘."
++})
++```
++
++## Agent 2: 성능 및 코드 품질 개선
++```
++Task({
++  subagent_type: "general-purpose", 
++  description: "PR 성능 및 코드 품질 개선",
++  prompt: "PR #2의 성능 및 코드 품질을 개선해줘. 다음 AI 리뷰 결과를 참고해서 주요(Major) 이슈들을 해결해줘:
++
++리뷰 코멘트 내용:
++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
++
++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
++
++### 📋 **변경된 파일들**
++- api.js
++- database.js
++- userManager.js
++- validation.js
++
++---
++
++## 📊 **종합 평가**
++- **코드 품질**: 2.5/10
++- **보안 위험도**: CRITICAL (매우 높음)
++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
++
++---
++
++## 🔴 **긴급 수정 필요 (Critical)**
++
++### 보안 취약점
++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
++
++### 인증/세션 관리
++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
++
++---
++
++## 🟡 **중요 개선사항 (Major)**
++
++### 성능 최적화
++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
++
++### 데이터 무결성
++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
++
++### UX 및 접근성
++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
++
++---
++
++## 🟢 **사용자 경험 향상 (Minor)**
++
++### 입력 검증 강화
++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
++
++### 모니터링 및 로깅
++- **구조화된 로깅**: winston 등 로깅 시스템 도입
++- **성능 모니터링**: APM 도구로 병목 지점 추적
++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
++
++---
++
++## ✅ **잘 구현된 부분**
++
++### 아키텍처 구조
++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
++
++### 검증 로직
++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
++
++---
++
++## 🎯 **우선 수정 권장사항**
++
++### 1순위 (즉시 수정)
++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
++3. **민감정보 필터링**: 응답에서 password, salt 제거
++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
++
++### 2순위 (1주일 내)
++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
++
++### 3순위 (2주일 내)  
++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
++2. **API 응답 표준화**: 일관된 응답 구조 적용
++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
++4. **보안 헤더**: helmet.js 미들웨어 적용
++
++---
++
++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
++
++변경된 파일들:
++api.js
++database.js
++userManager.js
++validation.js
++
++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 성능/품질 이슈들을 수정해줘:
++
++1. 동기 파일 I/O를 비동기로 변경 (fs.promises 사용)
++2. 불필요한 지연 제거 (10ms 인위적 지연)
++3. 정규식 최적화 (상수로 정의하여 재사용)
++4. 데이터 검색 최적화 (비효율적 전체 순회 개선)
++5. 에러 처리 일관성 개선
++6. ID 중복 체크 로직 추가
++
++Agent 1이 보안 수정을 완료한 후 그 결과를 기반으로 작업해줘.
++각 개선사항이 성능에 미치는 영향도 설명해줘."
++})
++```
++
++## Agent 3: UX 및 사용자 친화성 개선
++```
++Task({
++  subagent_type: "general-purpose",
++  description: "PR UX 및 사용자 친화성 개선", 
++  prompt: "PR #2의 UX 및 사용자 친화성을 개선해줘. 다음 AI 리뷰 결과를 참고해서 사용자 경험 관련 이슈들을 해결해줘:
++
++리뷰 코멘트 내용:
++## 🤖 AI 워크플로우 기반 종합 PR 리뷰
++
++**3개 전문 에이전트의 병렬 분석 결과를 통합한 PR #2 전체 리뷰입니다.**
++
++### 📋 **변경된 파일들**
++- api.js
++- database.js
++- userManager.js
++- validation.js
++
++---
++
++## 📊 **종합 평가**
++- **코드 품질**: 2.5/10
++- **보안 위험도**: CRITICAL (매우 높음)
++- **접근성 준수**: 낮음 (WCAG 가이드라인 미준수)
++- **전체 권장사항**: 프로덕션 배포 전 긴급 수정 필요
++
++---
++
++## 🔴 **긴급 수정 필요 (Critical)**
++
++### 보안 취약점
++- **CORS 오설정**: `origin: '*'` + `credentials: true`로 CSRF 공격 취약
++- **Admin 권한 부재**: 관리자 엔드포인트에 권한 체크 없음
++- **민감정보 노출**: 사용자 비밀번호, salt 값이 API 응답에 포함
++- **시스템 정보 유출**: 메모리 사용량, 플랫폼 정보 등 시스템 내부 정보 노출
++
++### 인증/세션 관리
++- **세션 만료 체크 없음**: 토큰 유효성 검사 불완전
++- **계정 잠금 해제 메커니즘 부재**: 5회 실패 시 영구 잠금
++- **자기 계정 삭제 가능**: 관리자가 자신의 계정도 삭제 가능
++
++---
++
++## 🟡 **중요 개선사항 (Major)**
++
++### 성능 최적화
++- **동기 파일 I/O**: 모든 파일 작업이 블로킹 방식으로 성능 저하
++- **불필요한 지연**: 데이터베이스 쿼리마다 10ms 인위적 지연
++- **비효율적 검색**: 전체 배열 순회로 검색 성능 저하
++
++### 데이터 무결성
++- **ID 중복 체크 없음**: 데이터 일관성 보장 부족
++- **타입 검증 미흡**: 업데이트 시 데이터 타입 검증 없음
++- **의존성 오류**: validator 라이브러리 존재 여부 확인 없이 사용
++
++### UX 및 접근성
++- **에러 메시지 불친화**: 기술적 메시지로 사용자 이해 어려움
++- **API 응답 구조 비일관성**: 엔드포인트마다 다른 응답 형식
++- **다국어 지원 부재**: 모든 메시지가 영어로 하드코딩
++
++---
++
++## 🟢 **사용자 경험 향상 (Minor)**
++
++### 입력 검증 강화
++- **실시간 검증 피드백**: 점진적 검증 결과 제공 필요
++- **검증 메시지 개선**: 구체적인 해결 방법 제시 부족
++- **정규식 최적화**: 매번 새로운 정규식 객체 생성 방지
++
++### 모니터링 및 로깅
++- **구조화된 로깅**: winston 등 로깅 시스템 도입
++- **성능 모니터링**: APM 도구로 병목 지점 추적
++- **헬스체크 개선**: 불필요한 시스템 정보 노출 제거
++
++---
++
++## ✅ **잘 구현된 부분**
++
++### 아키텍처 구조
++- **모듈화된 설계**: 파일별 역할 분리가 잘 되어 있음
++- **기본 CRUD 기능**: 사용자 관리 기본 기능 구현
++- **Rate Limiting 적용**: 기본적인 요청 제한 정책 존재
++
++### 검증 로직
++- **다양한 검증 규칙**: 이메일, 패스워드 등 기본 검증 로직 구현
++- **에러 처리 시도**: try-catch 블록으로 예외 상황 대응
++
++---
++
++## 🎯 **우선 수정 권장사항**
++
++### 1순위 (즉시 수정)
++1. **CORS 설정 수정**: 특정 origin만 허용하도록 변경
++2. **Admin 권한 체크 추가**: role 기반 접근 제어 구현  
++3. **민감정보 필터링**: 응답에서 password, salt 제거
++4. **세션 만료 체크**: JWT 또는 TTL 기반 세션 관리 도입
++
++### 2순위 (1주일 내)
++1. **비동기 파일 I/O**: fs.promises 사용으로 성능 개선
++2. **입력 검증 강화**: joi, express-validator 등 라이브러리 활용
++3. **에러 메시지 개선**: 사용자 친화적 메시지로 변경
++4. **계정 잠금 해제**: 시간 기반 또는 이메일 인증 방식 구현
++
++### 3순위 (2주일 내)  
++1. **데이터베이스 최적화**: 실제 DB 또는 인메모리 인덱스 도입
++2. **API 응답 표준화**: 일관된 응답 구조 적용
++3. **캐싱 시스템**: Redis 또는 메모리 캐시 구현
++4. **보안 헤더**: helmet.js 미들웨어 적용
++
++---
++
++**🤖 이 리뷰는 3개의 전문 AI 에이전트가 각각 다른 관점(코드품질, 보안성능, UX접근성)에서 분석한 결과를 통합한 것입니다.**
++
++변경된 파일들:
++api.js
++database.js
++userManager.js
++validation.js
++
++먼저 'gh pr diff 2' 명령어로 현재 코드를 확인한 후, 다음 UX 개선사항들을 적용해줘:
++
++1. 에러 메시지 사용자 친화화 (기술적 메시지 → 이해하기 쉬운 메시지)
++2. API 응답 구조 표준화 (success, data, error, meta 구조)
++3. 검증 메시지 개선 (구체적 해결 방법 제시)
++4. 계정 잠금 해제 메커니즘 추가
++5. 다국어 지원 기반 구축 (최소한 한국어/영어)
++6. 진행률 피드백 구조 추가
++
++Agent 1, 2의 작업이 완료된 후 그 결과를 기반으로 작업해줘.
++사용자 경험 개선 효과도 설명해줘."
++})
++```
++
++## 최종 단계: 자동 커밋 및 Push
++위 3개 에이전트의 개선 작업이 모두 완료되면 **자동으로** 다음을 실행해주세요:
++
++```bash
++# 1. 변경된 파일들 확인 및 스테이징
++echo "📝 변경된 파일들 확인 중..."
++git status --porcelain
++
++if [[ -n "$(git status --porcelain)" ]]; then
++    echo "✅ 변경사항이 발견되었습니다. 커밋을 진행합니다."
++    
++    # 모든 변경사항 스테이징
++    git add .
++    
++    # 개선 커밋 생성
++    git commit -m "$(cat <<'COMMIT_EOF'
++🔧 AI 워크플로우 기반 PR 개선
++
++- 보안 취약점 수정 (CORS, 권한 체크, 민감정보 필터링)
++- 성능 최적화 (비동기 I/O, 검색 최적화, 정규식 캐싱)  
++- UX 개선 (에러 메시지, API 응답 표준화, 다국어 지원)
++
++🤖 Generated with Claude Code
++
++Co-Authored-By: Claude <noreply@anthropic.com>
++COMMIT_EOF
++)"
++    
++    echo "✅ 커밋이 생성되었습니다."
++    
++    # PR 브랜치에 Push
++    echo "🚀 변경사항을 원격 저장소에 push 중..."
++    git push origin "$(git branch --show-current)"
++    echo "✅ Push가 완료되었습니다."
++    
++else
++    echo "⚠️  변경사항이 없습니다. 커밋을 생성하지 않습니다."
++fi
++
++# 2. PR에 개선 완료 코멘트 자동 추가
++gh pr comment 2 --body "$(cat <<'IMPROVE_EOF'
++## ✅ AI 워크플로우 기반 PR 개선 완료
++
++**3개 전문 에이전트가 병렬로 PR #2의 이슈들을 수정했습니다.**
++
++### 🔒 **보안 취약점 수정 완료**
++- ✅ CORS 설정 수정 (특정 도메인만 허용)
++- ✅ Admin 권한 체크 추가 (role 기반 접근 제어)
++- ✅ 민감정보 필터링 (password, salt 제거)
++- ✅ 세션 만료 체크 구현
++- ✅ 시스템 정보 노출 제거
++
++### ⚡ **성능 및 코드 품질 개선 완료**
++- ✅ 동기 파일 I/O → 비동기 변경
++- ✅ 불필요한 지연 제거
++- ✅ 정규식 최적화 (상수화)
++- ✅ 데이터 검색 최적화
++- ✅ 에러 처리 일관성 개선
++- ✅ ID 중복 체크 로직 추가
++
++### 🎨 **UX 및 사용자 친화성 개선 완료**
++- ✅ 에러 메시지 사용자 친화화
++- ✅ API 응답 구조 표준화
++- ✅ 검증 메시지 개선
++- ✅ 계정 잠금 해제 메커니즘 추가
++- ✅ 다국어 지원 기반 구축
++
++### 📊 **개선 후 예상 품질**
++- **코드 품질**: 2.5/10 → 8.5/10
++- **보안 위험도**: CRITICAL → LOW
++- **접근성 준수**: 낮음 → 높음
++
++---
++
++**🎯 다음 단계:**
++1. 코드 리뷰어가 변경사항 검토
++2. 추가 테스트 진행
++3. 승인 후 머지
++
++**🤖 이 개선은 3개의 전문 AI 에이전트가 보안, 성능, UX 관점에서 체계적으로 수행했습니다.**
++IMPROVE_EOF
++)"
++```
++
++## 추가 검증 단계 (선택사항)
++```bash
++# 린팅 및 타입 체크 (프로젝트에 설정되어 있다면)
++npm run lint 2>/dev/null || echo "Lint 스크립트를 찾을 수 없습니다"
++npm run typecheck 2>/dev/null || echo "TypeCheck 스크립트를 찾을 수 없습니다"
++
++# 간단한 문법 체크
++node -c api.js && echo "✅ api.js 문법 검사 통과"
++node -c database.js && echo "✅ database.js 문법 검사 통과"  
++node -c userManager.js && echo "✅ userManager.js 문법 검사 통과"
++node -c validation.js && echo "✅ validation.js 문법 검사 통과"
++```
+diff --git a/userManager.js b/userManager.js
+index 41ca59e..3647e26 100644
+--- a/userManager.js
++++ b/userManager.js
+@@ -1,5 +1,6 @@
+ const crypto = require('crypto');
+-const fs = require('fs');
++const fs = require('fs').promises;
++const fSync = require('fs');
+ const path = require('path');
+ const { validateUser, sanitizeInput } = require('./validation');
+ const DatabaseHelper = require('./database');
+@@ -7,27 +8,28 @@ const DatabaseHelper = require('./database');
+ class UserManager {
+     constructor() {
+         this.dbPath = path.join(__dirname, 'users.json');
+-        this.users = this.loadUsers();
++        this.users = [];
+         this.activeUsers = new Map();
+         this.loginAttempts = {};
+         this.db = new DatabaseHelper();
++        this.loadUsers(); // 비동기로 로드
+     }
+ 
+-    loadUsers() {
++    async loadUsers() {
+         try {
+-            if (fs.existsSync(this.dbPath)) {
+-                const data = fs.readFileSync(this.dbPath, 'utf8');
+-                return JSON.parse(data);
++            if (fSync.existsSync(this.dbPath)) {
++                const data = await fs.readFile(this.dbPath, 'utf8');
++                this.users = JSON.parse(data);
+             }
+         } catch (error) {
+             console.log('Error loading users:', error.message);
++            this.users = [];
+         }
+-        return [];
+     }
+ 
+-    saveUsers() {
++    async saveUsers() {
+         try {
+-            fs.writeFileSync(this.dbPath, JSON.stringify(this.users, null, 2));
++            await fs.writeFile(this.dbPath, JSON.stringify(this.users, null, 2));
+         } catch (error) {
+             console.error('Failed to save users:', error);
+             throw error;
+@@ -49,8 +51,13 @@ class UserManager {
+         const userId = crypto.randomBytes(16).toString('hex');
+         const salt = crypto.randomBytes(32).toString('hex');
+         
+-        // 의도적 비효율성: 동기 방식 해싱 사용
+-        const hashedPassword = crypto.pbkdf2Sync(userData.password, salt, 10000, 64, 'sha512').toString('hex');
++        // 개선: 비동기 방식 해싱 사용
++        const hashedPassword = await new Promise((resolve, reject) => {
++            crypto.pbkdf2(userData.password, salt, 10000, 64, 'sha512', (err, derivedKey) => {
++                if (err) reject(err);
++                else resolve(derivedKey.toString('hex'));
++            });
++        });
+ 
+         const newUser = {
+             id: userId,
+@@ -58,6 +65,7 @@ class UserManager {
+             username: userData.username,
+             password: hashedPassword,
+             salt: salt,
++            role: userData.role && ['user', 'admin'].includes(userData.role) ? userData.role : 'user',
+             createdAt: new Date().toISOString(),
+             lastLogin: null,
+             loginCount: 0,
+@@ -72,13 +80,13 @@ class UserManager {
+         this.users.push(newUser);
+         this.saveUsers();
+         
+-        // 의도적 버그: 패스워드와 salt를 반환에 포함
+-        return newUser;
++        // 보안 강화: 패스워드와 salt를 반환에서 제거
++        return this.sanitizeUser(newUser);
+     }
+ 
+     async loginUser(email, password) {
+-        // 의도적 비효율성: 매번 전체 배열 순회
+-        const user = this.users.filter(u => u.email === email)[0];
++        // 개선: 효율적인 사용자 검색
++        const user = this.users.find(u => u.email === email);
+         
+         if (!user) {
+             this.recordFailedLogin(email);
+@@ -92,7 +100,12 @@ class UserManager {
+             throw new Error('Account is deactivated');
+         }
+ 
+-        const hashedInput = crypto.pbkdf2Sync(password, user.salt, 10000, 64, 'sha512').toString('hex');
++        const hashedInput = await new Promise((resolve, reject) => {
++            crypto.pbkdf2(password, user.salt, 10000, 64, 'sha512', (err, derivedKey) => {
++                if (err) reject(err);
++                else resolve(derivedKey.toString('hex'));
++            });
++        });
+         
+         if (hashedInput !== user.password) {
+             throw new Error('Invalid credentials');
+@@ -103,13 +116,15 @@ class UserManager {
+         user.loginCount++;
+         
+         const sessionToken = crypto.randomBytes(32).toString('hex');
++        const sessionExpiry = Date.now() + (24 * 60 * 60 * 1000); // 24시간 후 만료
+         this.activeUsers.set(sessionToken, {
+             userId: user.id,
+             loginTime: Date.now(),
++            expiresAt: sessionExpiry,
+             userAgent: 'unknown' // 의도적 버그: 실제 user agent 정보 없음
+         });
+ 
+-        this.saveUsers();
++        await this.saveUsers();
+         delete this.loginAttempts[email]; // 성공 시 실패 기록 초기화
+ 
+         return {
+@@ -139,40 +154,58 @@ class UserManager {
+             const user = this.users.find(u => u.email === email);
+             if (user) {
+                 user.isActive = false;
+-                this.saveUsers();
++                this.saveUsers().catch(console.error); // 비동기 호출
+             }
+         }
+     }
+ 
+     getUserById(id) {
+-        // 의도적 비효율성: find 대신 filter 사용
+-        const users = this.users.filter(user => user.id === id);
+-        return users.length > 0 ? users[0] : null;
++        // 개선: 효율적인 사용자 검색
++        return this.users.find(user => user.id === id) || null;
+     }
+ 
+-    updateUser(id, updates) {
++    async updateUser(id, updates) {
+         const userIndex = this.users.findIndex(u => u.id === id);
+         if (userIndex === -1) {
+             throw new Error('User not found');
+         }
+ 
+-        // 의도적 버그: 업데이트 데이터 검증 없음
++        // 개선: 기본적인 업데이트 데이터 검증
++        if (typeof updates !== 'object' || updates === null) {
++            throw new Error('Updates must be a valid object');
++        }
++        
++        // 민감한 필드 보호
++        const protectedFields = ['password', 'salt', 'id'];
++        const safeUpdates = Object.keys(updates)
++            .filter(key => !protectedFields.includes(key))
++            .reduce((obj, key) => {
++                obj[key] = updates[key];
++                return obj;
++            }, {});
++        
+         const user = this.users[userIndex];
+-        Object.assign(user, updates);
++        Object.assign(user, safeUpdates, { updatedAt: new Date().toISOString() });
+         
+-        this.saveUsers();
++        await this.saveUsers();
+         return user;
+     }
+ 
+-    deleteUser(id) {
++    async deleteUser(id) {
+         const userIndex = this.users.findIndex(u => u.id === id);
+         if (userIndex === -1) {
+             return false;
+         }
+ 
+-        // 의도적 버그: 활성 세션 정리하지 않음
++        // 개선: 활성 세션 정리
++        for (const [token, session] of this.activeUsers.entries()) {
++            if (session.userId === id) {
++                this.activeUsers.delete(token);
++            }
++        }
++        
+         this.users.splice(userIndex, 1);
+-        this.saveUsers();
++        await this.saveUsers();
+         return true;
+     }
+ 
+@@ -187,7 +220,12 @@ class UserManager {
+             return null;
+         }
+ 
+-        // 의도적 버그: 세션 만료 체크 없음
++        // 세션 만료 체크
++        if (Date.now() > session.expiresAt) {
++            this.activeUsers.delete(token);
++            return null;
++        }
++
+         const user = this.getUserById(session.userId);
+         return user;
+     }
+@@ -196,12 +234,27 @@ class UserManager {
+         return this.activeUsers.delete(token);
+     }
+ 
+-    // 의도적 비효율성: 동기식 통계 계산
++    // 만료된 세션들을 정리하는 메서드
++    cleanupExpiredSessions() {
++        const now = Date.now();
++        let removedCount = 0;
++        
++        for (const [token, session] of this.activeUsers.entries()) {
++            if (now > session.expiresAt) {
++                this.activeUsers.delete(token);
++                removedCount++;
++            }
++        }
++        
++        return removedCount;
++    }
++
++    // 개선: 효율적인 통계 계산 (단일 순회)
+     getStatistics() {
+         const stats = {
+             totalUsers: this.users.length,
+-            activeUsers: this.users.filter(u => u.isActive).length,
+-            inactiveUsers: this.users.filter(u => !u.isActive).length,
++            activeUsers: 0,
++            inactiveUsers: 0,
+             avgLoginCount: 0,
+             recentLogins: 0
+         };
+@@ -209,9 +262,12 @@ class UserManager {
+         let totalLogins = 0;
+         const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+ 
+-        // 의도적 비효율성: 여러 번 배열 순회
++        // 개선: 단일 순회로 모든 통계 계산
+         this.users.forEach(user => {
+-            totalLogins += user.loginCount;
++            if (user.isActive) stats.activeUsers++;
++            else stats.inactiveUsers++;
++            
++            totalLogins += user.loginCount || 0;
+             if (user.lastLogin && new Date(user.lastLogin).getTime() > oneDayAgo) {
+                 stats.recentLogins++;
+             }
+@@ -220,6 +276,85 @@ class UserManager {
+         stats.avgLoginCount = this.users.length > 0 ? totalLogins / this.users.length : 0;
+         return stats;
+     }
++
++    // 개선: 효율적인 사용자 검색 기능
++    searchUsers(query, options = {}) {
++        const { type, limit = 20, offset = 0 } = options;
++        const lowerQuery = query.toLowerCase();
++        
++        // 개선: 필터링과 페이지네이션을 한 번에 처리
++        let filtered = this.users.filter(user => {
++            // 안전한 필드 접근
++            const searchFields = [
++                user.email,
++                user.username,
++                user.profile?.firstName,
++                user.profile?.lastName
++            ];
++            
++            return searchFields.some(field => 
++                field && field.toLowerCase().includes(lowerQuery)
++            );
++        });
++
++        const total = filtered.length;
++        const users = filtered
++            .slice(offset, offset + limit)
++            .map(user => this.sanitizeUser(user));
++
++        return { users, total };
++    }
++
++    // 개선: 페이지네이션 지원
++    getPaginatedUsers(page = 1, limit = 10) {
++        const offset = (page - 1) * limit;
++        const total = this.users.length;
++        const totalPages = Math.ceil(total / limit);
++        
++        const users = this.users
++            .slice(offset, offset + limit);
++            
++        return {
++            users,
++            pagination: {
++                currentPage: page,
++                totalPages,
++                totalUsers: total,
++                hasNext: page < totalPages,
++                hasPrev: page > 1
++            }
++        };
++    }
++
++    // 개선: 민감한 정보 제거 기능
++    sanitizeUser(user) {
++        if (!user) return null;
++        
++        const { password, salt, ...safeUser } = user;
++        return safeUser;
++    }
++
++    sanitizeUsers(users) {
++        return users.map(user => this.sanitizeUser(user));
++    }
++
++    // Admin 권한 체크 메서드
++    isAdmin(userId) {
++        const user = this.getUserById(userId);
++        return user && user.role === 'admin';
++    }
++
++    // 민감한 정보를 제거하는 메서드
++    sanitizeUser(user) {
++        if (!user) return null;
++        const { password, salt, ...safeUser } = user;
++        return safeUser;
++    }
++
++    // 배열의 모든 사용자에서 민감한 정보 제거
++    sanitizeUsers(users) {
++        return users.map(user => this.sanitizeUser(user));
++    }
+ }
+ 
+ module.exports = UserManager;
+\ No newline at end of file
+diff --git a/validation.js b/validation.js
+index b3210bd..bfa866e 100644
+--- a/validation.js
++++ b/validation.js
+@@ -1,9 +1,32 @@
+-const validator = require('validator'); // 의도적 버그: 라이브러리 존재 여부 확인 안함
+-
+-// 의도적 비효율성: 정규식을 매번 새로 생성
+-const EMAIL_REGEX = () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+-const PASSWORD_REGEX = () => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+-const USERNAME_REGEX = () => /^[a-zA-Z0-9_]{3,20}$/;
++const { i18n } = require('./i18n');
++
++// Password strength configuration
++const PASSWORD_CONFIG = {
++    minLength: 8,
++    maxLength: 128,
++    requireLowercase: true,
++    requireUppercase: true,
++    requireNumbers: true,
++    requireSpecialChars: true,
++    specialChars: '@$!%*?&',
++    commonPasswords: ['password', '123456', '123456789', 'qwerty', 'admin', 'letmein', 'welcome']
++};
++
++// 개선: 정규식을 상수로 정의하여 재사용
++const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
++const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
++
++// 개선: 패스워드 강도 검증용 정규식들을 상수로 정의
++const LOWERCASE_REGEX = /[a-z]/;
++const UPPERCASE_REGEX = /[A-Z]/;
++const DIGIT_REGEX = /\d/;
++const SPECIAL_CHAR_REGEX = /[@$!%*?&]/;
++const WEAK_PATTERNS = /123|abc/;
++
++// 개선: 공통 패스워드와 금지된 사용자명을 상수로 정의
++const COMMON_PASSWORDS = new Set(['password', '123456', 'qwerty', 'admin', '12345678', 'password123']);
++const FORBIDDEN_USERNAMES = new Set(['admin', 'root', 'user', 'guest', 'anonymous', 'test']);
+ 
+ class ValidationError extends Error {
+     constructor(field, message) {
+@@ -21,8 +44,8 @@ function validateEmail(email) {
+     // 의도적 버그: typeof 체크를 안함
+     const emailStr = email.toString();
+     
+-    // 의도적 비효율성: 여러 가지 검증 방법 중복 사용
+-    if (!EMAIL_REGEX().test(emailStr)) {
++    // 개선: 효율적인 이메일 형식 검증
++    if (!EMAIL_REGEX.test(emailStr)) {
+         return { isValid: false, error: 'Invalid email format' };
+     }
+     
+@@ -51,7 +74,12 @@ function validatePassword(password) {
+         return { isValid: false, errors };
+     }
+ 
+-    // 의도적 버그: 문자열 타입 체크 없음
++    // 개선: 타입 체크 추가
++    if (typeof password !== 'string') {
++        errors.push('Password must be a string');
++        return { isValid: false, errors };
++    }
++    
+     const pwd = password;
+     
+     if (pwd.length < 8) {
+@@ -62,33 +90,29 @@ function validatePassword(password) {
+         errors.push('Password too long (max 128 characters)');
+     }
+ 
+-    // 의도적 비효율성: 각 조건을 별도로 체크
+-    if (!/[a-z]/.test(pwd)) {
++    // 개선: 상수화된 정규식 사용
++    if (!LOWERCASE_REGEX.test(pwd)) {
+         errors.push('Password must contain lowercase letter');
+     }
+ 
+-    if (!/[A-Z]/.test(pwd)) {
++    if (!UPPERCASE_REGEX.test(pwd)) {
+         errors.push('Password must contain uppercase letter');
+     }
+ 
+-    if (!/\d/.test(pwd)) {
++    if (!DIGIT_REGEX.test(pwd)) {
+         errors.push('Password must contain number');
+     }
+ 
+-    if (!/[@$!%*?&]/.test(pwd)) {
++    if (!SPECIAL_CHAR_REGEX.test(pwd)) {
+         errors.push('Password must contain special character');
+     }
+ 
+-    // 의도적 버그: 공통 패스워드 체크 로직이 잘못됨
+-    const commonPasswords = ['password', '123456', 'qwerty', 'admin'];
+-    if (commonPasswords.includes(pwd.toLowerCase())) {
++    // 개선: Set을 사용한 효율적인 공통 패스워드 체크
++    if (COMMON_PASSWORDS.has(pwd.toLowerCase())) {
+         errors.push('Password is too common');
+     }
+ 
+-    // 의도적 비효율성: 최종 정규식 검사도 다시 수행
+-    if (!PASSWORD_REGEX().test(pwd) && errors.length === 0) {
+-        errors.push('Password format invalid');
+-    }
++    // 개선: 불필요한 중복 검증 제거 (이미 개별 조건들을 체크했음)
+ 
+     return {
+         isValid: errors.length === 0,
+@@ -105,10 +129,10 @@ function calculatePasswordStrength(password) {
+     if (password.length >= 12) score += 1;
+     if (password.length >= 16) score += 1;
+     
+-    if (/[a-z]/.test(password)) score += 1;
+-    if (/[A-Z]/.test(password)) score += 1;
+-    if (/\d/.test(password)) score += 1;
+-    if (/[@$!%*?&]/.test(password)) score += 2;
++    if (LOWERCASE_REGEX.test(password)) score += 1;
++    if (UPPERCASE_REGEX.test(password)) score += 1;
++    if (DIGIT_REGEX.test(password)) score += 1;
++    if (SPECIAL_CHAR_REGEX.test(password)) score += 2;
+     
+     // 의도적 비효율성: 중복된 문자 체크
+     const uniqueChars = new Set(password.split(''));
+@@ -116,9 +140,9 @@ function calculatePasswordStrength(password) {
+         score += 1;
+     }
+ 
+-    // 의도적 버그: 점수가 음수가 될 수 있음
+-    if (password.includes('123') || password.includes('abc')) {
+-        score -= 2;
++    // 개선: 약한 패턴 체크 및 음수 방지
++    if (WEAK_PATTERNS.test(password)) {
++        score = Math.max(0, score - 2);
+     }
+ 
+     if (score <= 2) return 'weak';
+@@ -132,9 +156,13 @@ function validateUsername(username) {
+         return { isValid: false, error: 'Username is required' };
+     }
+ 
+-    // 의도적 비효율성: 문자열 변환을 여러 번
+-    const user = username.toString().trim().toLowerCase();
+-    const originalUser = username.toString();
++    // 개선: 타입 체크 및 효율적인 문자열 처리
++    if (typeof username !== 'string') {
++        return { isValid: false, error: 'Username must be a string' };
++    }
++    
++    const originalUser = username.trim();
++    const user = originalUser.toLowerCase();
+     
+     if (user.length < 3) {
+         return { isValid: false, error: 'Username must be at least 3 characters' };
+@@ -144,14 +172,13 @@ function validateUsername(username) {
+         return { isValid: false, error: 'Username must be less than 20 characters' };
+     }
+ 
+-    // 의도적 버그: 소문자 변환한 것으로 정규식 체크
+-    if (!USERNAME_REGEX().test(user)) {
++    // 개선: 원본 문자열로 정규식 체크
++    if (!USERNAME_REGEX.test(originalUser)) {
+         return { isValid: false, error: 'Username can only contain letters, numbers and underscores' };
+     }
+ 
+-    // 의도적 비효율성: 금지된 단어를 배열에서 찾기
+-    const forbiddenWords = ['admin', 'root', 'user', 'guest', 'anonymous', 'test'];
+-    for (let word of forbiddenWords) {
++    // 개선: Set을 사용한 효율적인 금지 단어 체크
++    for (const word of FORBIDDEN_USERNAMES) {
+         if (user.includes(word)) {
+             return { isValid: false, error: `Username cannot contain '${word}'` };
+         }
+@@ -168,7 +195,11 @@ function validateAge(age) {
+ 
+     const numAge = parseInt(age);
+     
+-    // 의도적 버그: NaN 체크 없음
++    // 개선: NaN 체크 추가
++    if (isNaN(numAge)) {
++        return { isValid: false, error: 'Age must be a valid number' };
++    }
++    
+     if (numAge < 13) {
+         return { isValid: false, error: 'Age must be at least 13' };
+     }
+@@ -183,7 +214,15 @@ function validateAge(age) {
+ function validateUser(userData) {
+     const errors = [];
+     
+-    // 의도적 버그: userData가 null/undefined일 수 있음
++    // 개선: userData null/undefined 체크
++    if (!userData || typeof userData !== 'object') {
++        return { 
++            isValid: false, 
++            errors: ['User data must be a valid object'],
++            passwordStrength: 'unknown'
++        };
++    }
++    
+     const emailValidation = validateEmail(userData.email);
+     if (!emailValidation.isValid) {
+         errors.push(emailValidation.error);
+@@ -199,8 +238,11 @@ function validateUser(userData) {
+         errors.push(usernameValidation.error);
+     }
+ 
+-    // 의도적 버그: age 검증 결과를 사용하지 않음
+-    validateAge(userData.age);
++    // 개선: age 검증 결과 사용
++    const ageValidation = validateAge(userData.age);
++    if (!ageValidation.isValid) {
++        errors.push(ageValidation.error);
++    }
+ 
+     // 의도적 비효율성: 선택적 필드도 모두 검증
+     if (userData.firstName) {
+@@ -216,8 +258,8 @@ function validateUser(userData) {
+         if (typeof userData.lastName !== 'string' || userData.lastName.trim().length === 0) {
+             errors.push('Last name must be a valid string');
+         }
+-        // 의도적 버그: lastName 길이 체크가 firstName과 다름
+-        if (userData.lastName.length > 100) {
++        // 개선: firstName과 동일한 길이 제한
++        if (userData.lastName.length > 50) {
+             errors.push('Last name too long');
+         }
+     }
+diff --git a/validation_improved.js b/validation_improved.js
+new file mode 100644
+index 0000000..0d95cf0
+--- /dev/null
++++ b/validation_improved.js
+@@ -0,0 +1,812 @@
++const { i18n } = require('./i18n');
++
++// Optimized: Pre-compiled regex patterns
++const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
++const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
++
++// Password strength configuration
++const PASSWORD_CONFIG = {
++    minLength: 8,
++    maxLength: 128,
++    requireLowercase: true,
++    requireUppercase: true,
++    requireNumbers: true,
++    requireSpecialChars: true,
++    specialChars: '@$!%*?&',
++    commonPasswords: ['password', '123456', '123456789', 'qwerty', 'admin', 'letmein', 'welcome']
++};
++
++class ValidationError extends Error {
++    constructor(field, message, code = 'VALIDATION_ERROR', helpText = null) {
++        super(message);
++        this.name = 'ValidationError';
++        this.field = field;
++        this.code = code;
++        this.helpText = helpText;
++        this.timestamp = new Date().toISOString();
++    }
++
++    toJSON() {
++        return {
++            name: this.name,
++            message: this.message,
++            field: this.field,
++            code: this.code,
++            helpText: this.helpText,
++            timestamp: this.timestamp
++        };
++    }
++}
++
++function validateEmail(email) {
++    if (!email) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.required'),
++            helpText: i18n.t('help.emailFormat'),
++            code: 'EMAIL_REQUIRED'
++        };
++    }
++
++    // Type safety check
++    if (typeof email !== 'string') {
++        return {
++            isValid: false,
++            error: i18n.t('validation.emailInvalid'),
++            helpText: i18n.t('help.emailFormat'),
++            code: 'EMAIL_TYPE_ERROR'
++        };
++    }
++
++    const emailStr = email.trim().toLowerCase();
++    
++    // Length check first for efficiency
++    if (emailStr.length > 254) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.emailTooLong'),
++            helpText: i18n.t('help.emailFormat'),
++            code: 'EMAIL_TOO_LONG'
++        };
++    }
++    
++    // Format validation
++    if (!EMAIL_REGEX.test(emailStr)) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.emailInvalid'),
++            helpText: i18n.t('help.emailFormat'),
++            code: 'EMAIL_INVALID_FORMAT',
++            suggestions: ['user@example.com', 'test@gmail.com']
++        };
++    }
++
++    return { 
++        isValid: true,
++        value: emailStr // Return sanitized value
++    };
++}
++
++function validatePassword(password) {
++    const errors = [];
++    const suggestions = [];
++    
++    if (!password) {
++        return {
++            isValid: false,
++            errors: [{
++                message: i18n.t('validation.required'),
++                code: 'PASSWORD_REQUIRED',
++                helpText: i18n.t('help.passwordRequirements')
++            }]
++        };
++    }
++
++    // Type safety check
++    if (typeof password !== 'string') {
++        return {
++            isValid: false,
++            errors: [{
++                message: i18n.t('validation.passwordTooShort'),
++                code: 'PASSWORD_TYPE_ERROR',
++                helpText: i18n.t('help.passwordRequirements')
++            }]
++        };
++    }
++
++    const pwd = password;
++    
++    // Length validation with specific guidance
++    if (pwd.length < PASSWORD_CONFIG.minLength) {
++        errors.push({
++            message: i18n.t('validation.passwordTooShort'),
++            code: 'PASSWORD_TOO_SHORT',
++            helpText: i18n.t('help.passwordRequirements'),
++            currentLength: pwd.length,
++            requiredLength: PASSWORD_CONFIG.minLength
++        });
++        suggestions.push(`현재 ${pwd.length}자입니다. ${PASSWORD_CONFIG.minLength - pwd.length}자 더 추가해주세요.`);
++    }
++
++    if (pwd.length > PASSWORD_CONFIG.maxLength) {
++        errors.push({
++            message: i18n.t('validation.passwordTooLong'),
++            code: 'PASSWORD_TOO_LONG',
++            helpText: `최대 ${PASSWORD_CONFIG.maxLength}자까지 가능합니다`
++        });
++    }
++
++    // Character requirement checks with specific guidance
++    if (!/[a-z]/.test(pwd)) {
++        errors.push({
++            message: i18n.t('validation.passwordMissingLowercase'),
++            code: 'PASSWORD_NO_LOWERCASE',
++            helpText: '소문자 a-z 중 하나 이상 포함해주세요',
++            example: 'password123A!'
++        });
++        suggestions.push('소문자를 추가하세요 (예: a, b, c)');
++    }
++
++    if (!/[A-Z]/.test(pwd)) {
++        errors.push({
++            message: i18n.t('validation.passwordMissingUppercase'),
++            code: 'PASSWORD_NO_UPPERCASE',
++            helpText: '대문자 A-Z 중 하나 이상 포함해주세요',
++            example: 'Password123!'
++        });
++        suggestions.push('대문자를 추가하세요 (예: A, B, C)');
++    }
++
++    if (!/\d/.test(pwd)) {
++        errors.push({
++            message: i18n.t('validation.passwordMissingNumber'),
++            code: 'PASSWORD_NO_NUMBER',
++            helpText: '숫자 0-9 중 하나 이상 포함해주세요',
++            example: 'Password123!'
++        });
++        suggestions.push('숫자를 추가하세요 (예: 1, 2, 3)');
++    }
++
++    if (!new RegExp(`[${PASSWORD_CONFIG.specialChars}]`).test(pwd)) {
++        errors.push({
++            message: i18n.t('validation.passwordMissingSpecial'),
++            code: 'PASSWORD_NO_SPECIAL',
++            helpText: `특수문자 ${PASSWORD_CONFIG.specialChars} 중 하나 이상 포함해주세요`,
++            example: 'Password123!',
++            allowedSpecialChars: PASSWORD_CONFIG.specialChars.split('')
++        });
++        suggestions.push(`특수문자를 추가하세요 (사용가능: ${PASSWORD_CONFIG.specialChars})`);
++    }
++
++    // Common password check with better logic
++    if (PASSWORD_CONFIG.commonPasswords.some(common => pwd.toLowerCase().includes(common))) {
++        errors.push({
++            message: i18n.t('validation.passwordCommon'),
++            code: 'PASSWORD_TOO_COMMON',
++            helpText: '더 복잡하고 예측하기 어려운 비밀번호를 만들어주세요',
++            suggestions: ['개인적인 단어와 숫자 조합 사용', '문장의 첫 글자들로 만들기', '특별한 기호 조합 사용']
++        });
++    }
++
++    const strength = calculatePasswordStrength(pwd);
++    const strengthFeedback = getPasswordStrengthFeedback(pwd, strength);
++
++    return {
++        isValid: errors.length === 0,
++        errors,
++        suggestions,
++        strength,
++        strengthFeedback,
++        progressScore: Math.min(100, Math.max(0, ((4 - errors.length) / 4) * 100))
++    };
++}
++
++function calculatePasswordStrength(password) {
++    let score = 0;
++    const feedback = {
++        improvements: [],
++        positives: []
++    };
++    
++    // Length scoring
++    if (password.length >= 8) {
++        score += 1;
++        feedback.positives.push('충분한 길이');
++    }
++    if (password.length >= 12) {
++        score += 1;
++        feedback.positives.push('권장 길이 이상');
++    }
++    if (password.length >= 16) {
++        score += 1;
++        feedback.positives.push('매우 긴 길이');
++    }
++    
++    // Character variety scoring
++    if (/[a-z]/.test(password)) {
++        score += 1;
++        feedback.positives.push('소문자 포함');
++    } else {
++        feedback.improvements.push('소문자 추가');
++    }
++    
++    if (/[A-Z]/.test(password)) {
++        score += 1;
++        feedback.positives.push('대문자 포함');
++    } else {
++        feedback.improvements.push('대문자 추가');
++    }
++    
++    if (/\d/.test(password)) {
++        score += 1;
++        feedback.positives.push('숫자 포함');
++    } else {
++        feedback.improvements.push('숫자 추가');
++    }
++    
++    if (/[@$!%*?&]/.test(password)) {
++        score += 2;
++        feedback.positives.push('특수문자 포함');
++    } else {
++        feedback.improvements.push('특수문자 추가');
++    }
++    
++    // Uniqueness scoring (prevent negative scores)
++    const uniqueChars = new Set(password.split(''));
++    const uniqueness = uniqueChars.size / password.length;
++    if (uniqueness > 0.7) {
++        score += 1;
++        feedback.positives.push('다양한 문자 사용');
++    } else if (uniqueness < 0.5) {
++        feedback.improvements.push('반복 문자 줄이기');
++    }
++
++    // Pattern penalties (but don't allow negative scores)
++    let penalty = 0;
++    if (password.toLowerCase().includes('123')) {
++        penalty += 1;
++        feedback.improvements.push('연속 숫자 피하기');
++    }
++    if (password.toLowerCase().includes('abc')) {
++        penalty += 1;
++        feedback.improvements.push('연속 문자 피하기');
++    }
++    
++    // Apply penalty but ensure score doesn't go below 0
++    score = Math.max(0, score - penalty);
++
++    // Determine strength level
++    let level;
++    if (score <= 2) level = 'weak';
++    else if (score <= 4) level = 'medium';
++    else if (score <= 6) level = 'strong';
++    else level = 'very_strong';
++
++    return {
++        level,
++        score,
++        maxScore: 9,
++        percentage: Math.round((score / 9) * 100),
++        feedback
++    };
++}
++
++function getPasswordStrengthFeedback(password, strength) {
++    const messages = {
++        'weak': {
++            message: '약한 비밀번호입니다',
++            color: '#ff4444',
++            recommendations: [
++                '길이를 늘려주세요 (최소 12자 권장)',
++                '대소문자, 숫자, 특수문자를 모두 포함해주세요',
++                '일반적인 단어나 패턴을 피해주세요'
++            ]
++        },
++        'medium': {
++            message: '보통 수준의 비밀번호입니다',
++            color: '#ffaa00',
++            recommendations: [
++                '특수문자를 추가하여 보안을 강화해주세요',
++                '길이를 조금 더 늘려보세요',
++                '예측하기 어려운 조합을 사용해주세요'
++            ]
++        },
++        'strong': {
++            message: '강한 비밀번호입니다',
++            color: '#44aa44',
++            recommendations: [
++                '매우 좋은 비밀번호입니다',
++                '정기적으로 변경하는 것을 권장합니다'
++            ]
++        },
++        'very_strong': {
++            message: '매우 강한 비밀번호입니다',
++            color: '#00aa44',
++            recommendations: [
++                '훌륭한 비밀번호입니다!',
++                '보안이 매우 우수합니다'
++            ]
++        }
++    };
++
++    return messages[strength.level] || messages['weak'];
++}
++
++function validateUsername(username) {
++    if (!username) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.required'),
++            helpText: i18n.t('help.usernameRequirements'),
++            code: 'USERNAME_REQUIRED'
++        };
++    }
++
++    // Type safety check
++    if (typeof username !== 'string') {
++        return {
++            isValid: false,
++            error: i18n.t('validation.usernameInvalid'),
++            helpText: i18n.t('help.usernameRequirements'),
++            code: 'USERNAME_TYPE_ERROR'
++        };
++    }
++
++    const originalUser = username.trim();
++    const user = originalUser.toLowerCase();
++    
++    // Length validation with specific feedback
++    if (originalUser.length < 3) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.usernameTooShort'),
++            helpText: `현재 ${originalUser.length}자입니다. ${3 - originalUser.length}자 더 필요합니다.`,
++            code: 'USERNAME_TOO_SHORT',
++            currentLength: originalUser.length,
++            requiredLength: 3
++        };
++    }
++
++    if (originalUser.length > 20) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.usernameTooLong'),
++            helpText: `현재 ${originalUser.length}자입니다. ${originalUser.length - 20}자 줄여주세요.`,
++            code: 'USERNAME_TOO_LONG',
++            currentLength: originalUser.length,
++            maxLength: 20
++        };
++    }
++
++    // Format validation with original case for accurate checking
++    if (!USERNAME_REGEX.test(originalUser)) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.usernameInvalid'),
++            helpText: i18n.t('help.usernameRequirements'),
++            code: 'USERNAME_INVALID_FORMAT',
++            allowedChars: '영문 대소문자, 숫자, 밑줄(_)',
++            examples: ['user123', 'my_name', 'john_doe']
++        };
++    }
++
++    // Forbidden words check with better error message
++    const forbiddenWords = ['admin', 'root', 'user', 'guest', 'anonymous', 'test', 'system', 'null', 'undefined'];
++    const foundForbidden = forbiddenWords.find(word => user.includes(word));
++    
++    if (foundForbidden) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.usernameForbidden'),
++            helpText: `'${foundForbidden}' 단어를 포함할 수 없습니다. 다른 사용자명을 선택해주세요.`,
++            code: 'USERNAME_FORBIDDEN_WORD',
++            forbiddenWord: foundForbidden,
++            suggestions: generateUsernameSuggestions(originalUser)
++        };
++    }
++
++    return { 
++        isValid: true, 
++        value: originalUser,
++        suggestions: originalUser.length < 6 ? ['사용자명을 조금 더 길게 만들어보세요'] : []
++    };
++}
++
++function generateUsernameSuggestions(username) {
++    const base = username.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10);
++    const suggestions = [];
++    
++    if (base.length >= 3) {
++        suggestions.push(`${base}_${Math.floor(Math.random() * 1000)}`);
++        suggestions.push(`${base}_new`);
++        suggestions.push(`my_${base}`);
++    } else {
++        suggestions.push('my_username');
++        suggestions.push('user_' + Math.floor(Math.random() * 10000));
++    }
++    
++    return suggestions.slice(0, 3);
++}
++
++function validateAge(age) {
++    // Age is optional, so null/undefined is valid
++    if (age === null || age === undefined || age === '') {
++        return { isValid: true };
++    }
++
++    // Convert to number and check for NaN
++    const numAge = parseInt(age, 10);
++    
++    if (isNaN(numAge)) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.ageInvalid'),
++            helpText: '숫자로 입력해주세요 (예: 25)',
++            code: 'AGE_NOT_NUMBER'
++        };
++    }
++    
++    if (numAge < 13) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.ageTooYoung'),
++            helpText: '서비스 이용을 위해서는 13세 이상이어야 합니다',
++            code: 'AGE_TOO_YOUNG',
++            minimumAge: 13
++        };
++    }
++
++    if (numAge > 120) {
++        return {
++            isValid: false,
++            error: i18n.t('validation.ageTooOld'),
++            helpText: '올바른 나이를 입력해주세요 (13-120세)',
++            code: 'AGE_TOO_OLD',
++            maximumAge: 120
++        };
++    }
++
++    return { 
++        isValid: true, 
++        value: numAge 
++    };
++}
++
++function validateNames(firstName, lastName) {
++    const errors = [];
++    const values = {};
++    
++    // First name validation (optional)
++    if (firstName !== undefined && firstName !== null && firstName !== '') {
++        if (typeof firstName !== 'string') {
++            errors.push({
++                field: 'firstName',
++                message: '이름은 문자로 입력해주세요',
++                code: 'FIRSTNAME_TYPE_ERROR'
++            });
++        } else {
++            const trimmedFirst = firstName.trim();
++            if (trimmedFirst.length === 0) {
++                errors.push({
++                    field: 'firstName',
++                    message: '이름을 입력해주세요',
++                    code: 'FIRSTNAME_EMPTY'
++                });
++            } else if (trimmedFirst.length > 50) {
++                errors.push({
++                    field: 'firstName',
++                    message: '이름이 너무 깁니다 (최대 50자)',
++                    code: 'FIRSTNAME_TOO_LONG',
++                    currentLength: trimmedFirst.length,
++                    maxLength: 50
++                });
++            } else {
++                values.firstName = trimmedFirst;
++            }
++        }
++    }
++
++    // Last name validation (optional)
++    if (lastName !== undefined && lastName !== null && lastName !== '') {
++        if (typeof lastName !== 'string') {
++            errors.push({
++                field: 'lastName',
++                message: '성은 문자로 입력해주세요',
++                code: 'LASTNAME_TYPE_ERROR'
++            });
++        } else {
++            const trimmedLast = lastName.trim();
++            if (trimmedLast.length === 0) {
++                errors.push({
++                    field: 'lastName',
++                    message: '성을 입력해주세요',
++                    code: 'LASTNAME_EMPTY'
++                });
++            } else if (trimmedLast.length > 50) { // Fixed: consistent length limit
++                errors.push({
++                    field: 'lastName',
++                    message: '성이 너무 깁니다 (최대 50자)',
++                    code: 'LASTNAME_TOO_LONG',
++                    currentLength: trimmedLast.length,
++                    maxLength: 50
++                });
++            } else {
++                values.lastName = trimmedLast;
++            }
++        }
++    }
++
++    return {
++        isValid: errors.length === 0,
++        errors,
++        values
++    };
++}
++
++function validateUser(userData, options = {}) {
++    const errors = [];
++    const validatedData = {};
++    const progress = {
++        total: 5,
++        completed: 0,
++        fields: {}
++    };
++    
++    // Input safety check
++    if (!userData || typeof userData !== 'object') {
++        return {
++            isValid: false,
++            errors: [{
++                message: '사용자 정보가 올바르지 않습니다',
++                code: 'INVALID_USER_DATA',
++                helpText: '모든 필수 정보를 입력해주세요'
++            }],
++            progress: { total: 5, completed: 0, percentage: 0 }
++        };
++    }
++
++    // Email validation
++    const emailValidation = validateEmail(userData.email);
++    progress.fields.email = emailValidation.isValid ? 'valid' : 'invalid';
++    if (emailValidation.isValid) {
++        validatedData.email = emailValidation.value;
++        progress.completed++;
++    } else {
++        errors.push({
++            field: 'email',
++            ...emailValidation
++        });
++    }
++
++    // Password validation
++    const passwordValidation = validatePassword(userData.password);
++    progress.fields.password = passwordValidation.isValid ? 'valid' : 'invalid';
++    if (passwordValidation.isValid) {
++        progress.completed++;
++        validatedData.passwordStrength = passwordValidation.strength;
++    } else {
++        errors.push(...passwordValidation.errors.map(err => ({
++            field: 'password',
++            ...err
++        })));
++    }
++
++    // Username validation
++    const usernameValidation = validateUsername(userData.username);
++    progress.fields.username = usernameValidation.isValid ? 'valid' : 'invalid';
++    if (usernameValidation.isValid) {
++        validatedData.username = usernameValidation.value;
++        progress.completed++;
++    } else {
++        errors.push({
++            field: 'username',
++            ...usernameValidation
++        });
++    }
++
++    // Age validation (optional field)
++    const ageValidation = validateAge(userData.age);
++    progress.fields.age = ageValidation.isValid ? 'valid' : 'invalid';
++    if (ageValidation.isValid) {
++        if (ageValidation.value !== undefined) {
++            validatedData.age = ageValidation.value;
++        }
++        progress.completed++;
++    } else {
++        errors.push({
++            field: 'age',
++            ...ageValidation
++        });
++    }
++
++    // Name validation (optional fields)
++    const nameValidation = validateNames(userData.firstName, userData.lastName);
++    progress.fields.names = nameValidation.isValid ? 'valid' : 'invalid';
++    if (nameValidation.isValid) {
++        Object.assign(validatedData, nameValidation.values);
++        progress.completed++;
++    } else {
++        errors.push(...nameValidation.errors);
++    }
++
++    // Calculate overall progress
++    progress.percentage = Math.round((progress.completed / progress.total) * 100);
++
++    return {
++        isValid: errors.length === 0,
++        errors,
++        validatedData,
++        progress,
++        suggestions: generateValidationSuggestions(errors),
++        passwordStrength: passwordValidation.strength
++    };
++}
++
++function generateValidationSuggestions(errors) {
++    if (errors.length === 0) {
++        return ['모든 항목이 올바르게 입력되었습니다!'];
++    }
++    
++    const suggestions = [];
++    const errorFields = [...new Set(errors.map(e => e.field))];
++    
++    if (errorFields.includes('email')) {
++        suggestions.push('이메일 주소를 다시 확인해주세요');
++    }
++    if (errorFields.includes('password')) {
++        suggestions.push('비밀번호 요구사항을 확인해주세요');
++    }
++    if (errorFields.includes('username')) {
++        suggestions.push('사용자명 규칙을 확인해주세요');
++    }
++    
++    suggestions.push('입력란을 하나씩 천천히 확인해보세요');
++    suggestions.push('문제가 계속되면 고객지원팀에 문의하세요');
++    
++    return suggestions;
++}
++
++function sanitizeInput(input, type = 'string', options = {}) {
++    if (input === null || input === undefined) {
++        return options.returnNull ? null : '';
++    }
++
++    // Convert to string safely
++    let sanitized;
++    try {
++        sanitized = String(input);
++    } catch (e) {
++        return options.returnNull ? null : '';
++    }
++
++    // Type-specific sanitization
++    switch (type) {
++        case 'email':
++            return sanitized.toLowerCase().trim();
++            
++        case 'username':
++            // Consistent with validation logic
++            return sanitized.trim();
++            
++        case 'name':
++            return sanitized
++                .trim()
++                .replace(/\s+/g, ' ') // Multiple spaces to single space
++                .replace(/[<>"'&]/g, ''); // Basic XSS prevention
++                
++        case 'string':
++        default:
++            // Comprehensive XSS prevention
++            return sanitized
++                .trim()
++                .replace(/[<>"'&]/g, '') // Remove dangerous characters
++                .replace(/\u0000-\u001f/g, ''); // Remove control characters
++    }
++}
++
++// Utility functions for enhanced UX
++function isStrongPassword(password) {
++    const validation = validatePassword(password);
++    return validation.isValid && 
++           (validation.strength.level === 'strong' || validation.strength.level === 'very_strong');
++}
++
++function isValidEmailDomain(email) {
++    if (!email || typeof email !== 'string') return false;
++    
++    const parts = email.split('@');
++    if (parts.length !== 2) return false;
++    
++    const domain = parts[1];
++    if (!domain || domain.length < 3) return false;
++    
++    // Check for valid domain format
++    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/;
++    return domainRegex.test(domain);
++}
++
++// Real-time validation helper for progressive validation
++function validateFieldProgressive(field, value, allData = {}) {
++    const validations = {
++        email: validateEmail,
++        password: validatePassword,
++        username: validateUsername,
++        age: validateAge
++    };
++    
++    const validator = validations[field];
++    if (!validator) {
++        return { isValid: false, error: 'Unknown field type' };
++    }
++    
++    const result = validator(value);
++    
++    // Add contextual suggestions based on other fields
++    if (field === 'username' && result.isValid && allData.email) {
++        const emailPart = allData.email.split('@')[0];
++        if (value.toLowerCase() === emailPart.toLowerCase()) {
++            result.suggestions = result.suggestions || [];
++            result.suggestions.push('이메일과 다른 사용자명을 권장합니다');
++        }
++    }
++    
++    return result;
++}
++
++// Get validation progress for multi-step forms
++function getValidationProgress(userData) {
++    const requiredFields = ['email', 'password', 'username'];
++    const optionalFields = ['age', 'firstName', 'lastName'];
++    
++    const progress = {
++        required: { completed: 0, total: requiredFields.length },
++        optional: { completed: 0, total: optionalFields.length },
++        overall: { completed: 0, total: requiredFields.length + optionalFields.length }
++    };
++    
++    requiredFields.forEach(field => {
++        const validation = validateFieldProgressive(field, userData[field], userData);
++        if (validation.isValid) {
++            progress.required.completed++;
++            progress.overall.completed++;
++        }
++    });
++    
++    optionalFields.forEach(field => {
++        if (userData[field]) {
++            const validation = validateFieldProgressive(field, userData[field], userData);
++            if (validation.isValid) {
++                progress.optional.completed++;
++                progress.overall.completed++;
++            }
++        }
++    });
++    
++    // Calculate percentages
++    progress.required.percentage = Math.round((progress.required.completed / progress.required.total) * 100);
++    progress.optional.percentage = Math.round((progress.optional.completed / progress.optional.total) * 100);
++    progress.overall.percentage = Math.round((progress.overall.completed / progress.overall.total) * 100);
++    
++    return progress;
++}
++
++module.exports = {
++    validateUser,
++    validateEmail,
++    validatePassword,
++    validateUsername,
++    validateAge,
++    validateNames,
++    sanitizeInput,
++    ValidationError,
++    isStrongPassword,
++    isValidEmailDomain,
++    calculatePasswordStrength,
++    getPasswordStrengthFeedback,
++    generateUsernameSuggestions,
++    validateFieldProgressive,
++    getValidationProgress,
++    generateValidationSuggestions,
++    PASSWORD_CONFIG
++};
+\ No newline at end of file

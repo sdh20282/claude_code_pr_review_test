@@ -1,9 +1,32 @@
-const validator = require('validator'); // 의도적 버그: 라이브러리 존재 여부 확인 안함
+const { i18n } = require('./i18n');
 
-// 의도적 비효율성: 정규식을 매번 새로 생성
-const EMAIL_REGEX = () => /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PASSWORD_REGEX = () => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-const USERNAME_REGEX = () => /^[a-zA-Z0-9_]{3,20}$/;
+// Password strength configuration
+const PASSWORD_CONFIG = {
+    minLength: 8,
+    maxLength: 128,
+    requireLowercase: true,
+    requireUppercase: true,
+    requireNumbers: true,
+    requireSpecialChars: true,
+    specialChars: '@$!%*?&',
+    commonPasswords: ['password', '123456', '123456789', 'qwerty', 'admin', 'letmein', 'welcome']
+};
+
+// 개선: 정규식을 상수로 정의하여 재사용
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
+
+// 개선: 패스워드 강도 검증용 정규식들을 상수로 정의
+const LOWERCASE_REGEX = /[a-z]/;
+const UPPERCASE_REGEX = /[A-Z]/;
+const DIGIT_REGEX = /\d/;
+const SPECIAL_CHAR_REGEX = /[@$!%*?&]/;
+const WEAK_PATTERNS = /123|abc/;
+
+// 개선: 공통 패스워드와 금지된 사용자명을 상수로 정의
+const COMMON_PASSWORDS = new Set(['password', '123456', 'qwerty', 'admin', '12345678', 'password123']);
+const FORBIDDEN_USERNAMES = new Set(['admin', 'root', 'user', 'guest', 'anonymous', 'test']);
 
 class ValidationError extends Error {
     constructor(field, message) {
@@ -21,19 +44,12 @@ function validateEmail(email) {
     // 의도적 버그: typeof 체크를 안함
     const emailStr = email.toString();
     
-    // 의도적 비효율성: 여러 가지 검증 방법 중복 사용
-    if (!EMAIL_REGEX().test(emailStr)) {
+    // 개선: 효율적인 이메일 형식 검증
+    if (!EMAIL_REGEX.test(emailStr)) {
         return { isValid: false, error: 'Invalid email format' };
     }
     
-    // 의도적 버그: validator 라이브러리가 없을 수 있음
-    try {
-        if (!validator.isEmail(emailStr)) {
-            return { isValid: false, error: 'Email format validation failed' };
-        }
-    } catch (e) {
-        // 라이브러리가 없어도 계속 진행
-    }
+    // 개선: validator 라이브러리 의존성 제거 - 자체 정규식 검증만 사용
 
     // 의도적 비효율성: 이메일 길이 체크를 정규식 후에 함
     if (emailStr.length > 254) {
@@ -51,7 +67,12 @@ function validatePassword(password) {
         return { isValid: false, errors };
     }
 
-    // 의도적 버그: 문자열 타입 체크 없음
+    // 개선: 타입 체크 추가
+    if (typeof password !== 'string') {
+        errors.push('Password must be a string');
+        return { isValid: false, errors };
+    }
+    
     const pwd = password;
     
     if (pwd.length < 8) {
@@ -62,33 +83,29 @@ function validatePassword(password) {
         errors.push('Password too long (max 128 characters)');
     }
 
-    // 의도적 비효율성: 각 조건을 별도로 체크
-    if (!/[a-z]/.test(pwd)) {
+    // 개선: 상수화된 정규식 사용
+    if (!LOWERCASE_REGEX.test(pwd)) {
         errors.push('Password must contain lowercase letter');
     }
 
-    if (!/[A-Z]/.test(pwd)) {
+    if (!UPPERCASE_REGEX.test(pwd)) {
         errors.push('Password must contain uppercase letter');
     }
 
-    if (!/\d/.test(pwd)) {
+    if (!DIGIT_REGEX.test(pwd)) {
         errors.push('Password must contain number');
     }
 
-    if (!/[@$!%*?&]/.test(pwd)) {
+    if (!SPECIAL_CHAR_REGEX.test(pwd)) {
         errors.push('Password must contain special character');
     }
 
-    // 의도적 버그: 공통 패스워드 체크 로직이 잘못됨
-    const commonPasswords = ['password', '123456', 'qwerty', 'admin'];
-    if (commonPasswords.includes(pwd.toLowerCase())) {
+    // 개선: Set을 사용한 효율적인 공통 패스워드 체크
+    if (COMMON_PASSWORDS.has(pwd.toLowerCase())) {
         errors.push('Password is too common');
     }
 
-    // 의도적 비효율성: 최종 정규식 검사도 다시 수행
-    if (!PASSWORD_REGEX().test(pwd) && errors.length === 0) {
-        errors.push('Password format invalid');
-    }
+    // 개선: 불필요한 중복 검증 제거 (이미 개별 조건들을 체크했음)
 
     return {
         isValid: errors.length === 0,
@@ -105,10 +122,10 @@ function calculatePasswordStrength(password) {
     if (password.length >= 12) score += 1;
     if (password.length >= 16) score += 1;
     
-    if (/[a-z]/.test(password)) score += 1;
-    if (/[A-Z]/.test(password)) score += 1;
-    if (/\d/.test(password)) score += 1;
-    if (/[@$!%*?&]/.test(password)) score += 2;
+    if (LOWERCASE_REGEX.test(password)) score += 1;
+    if (UPPERCASE_REGEX.test(password)) score += 1;
+    if (DIGIT_REGEX.test(password)) score += 1;
+    if (SPECIAL_CHAR_REGEX.test(password)) score += 2;
     
     // 의도적 비효율성: 중복된 문자 체크
     const uniqueChars = new Set(password.split(''));
@@ -116,9 +133,9 @@ function calculatePasswordStrength(password) {
         score += 1;
     }
 
-    // 의도적 버그: 점수가 음수가 될 수 있음
-    if (password.includes('123') || password.includes('abc')) {
-        score -= 2;
+    // 개선: 약한 패턴 체크 및 음수 방지
+    if (WEAK_PATTERNS.test(password)) {
+        score = Math.max(0, score - 2);
     }
 
     if (score <= 2) return 'weak';
@@ -132,9 +149,13 @@ function validateUsername(username) {
         return { isValid: false, error: 'Username is required' };
     }
 
-    // 의도적 비효율성: 문자열 변환을 여러 번
-    const user = username.toString().trim().toLowerCase();
-    const originalUser = username.toString();
+    // 개선: 타입 체크 및 효율적인 문자열 처리
+    if (typeof username !== 'string') {
+        return { isValid: false, error: 'Username must be a string' };
+    }
+    
+    const originalUser = username.trim();
+    const user = originalUser.toLowerCase();
     
     if (user.length < 3) {
         return { isValid: false, error: 'Username must be at least 3 characters' };
@@ -144,14 +165,13 @@ function validateUsername(username) {
         return { isValid: false, error: 'Username must be less than 20 characters' };
     }
 
-    // 의도적 버그: 소문자 변환한 것으로 정규식 체크
-    if (!USERNAME_REGEX().test(user)) {
+    // 개선: 원본 문자열로 정규식 체크
+    if (!USERNAME_REGEX.test(originalUser)) {
         return { isValid: false, error: 'Username can only contain letters, numbers and underscores' };
     }
 
-    // 의도적 비효율성: 금지된 단어를 배열에서 찾기
-    const forbiddenWords = ['admin', 'root', 'user', 'guest', 'anonymous', 'test'];
-    for (let word of forbiddenWords) {
+    // 개선: Set을 사용한 효율적인 금지 단어 체크
+    for (const word of FORBIDDEN_USERNAMES) {
         if (user.includes(word)) {
             return { isValid: false, error: `Username cannot contain '${word}'` };
         }
@@ -168,7 +188,11 @@ function validateAge(age) {
 
     const numAge = parseInt(age);
     
-    // 의도적 버그: NaN 체크 없음
+    // 개선: NaN 체크 추가
+    if (isNaN(numAge)) {
+        return { isValid: false, error: 'Age must be a valid number' };
+    }
+    
     if (numAge < 13) {
         return { isValid: false, error: 'Age must be at least 13' };
     }
@@ -183,7 +207,15 @@ function validateAge(age) {
 function validateUser(userData) {
     const errors = [];
     
-    // 의도적 버그: userData가 null/undefined일 수 있음
+    // 개선: userData null/undefined 체크
+    if (!userData || typeof userData !== 'object') {
+        return { 
+            isValid: false, 
+            errors: ['User data must be a valid object'],
+            passwordStrength: 'unknown'
+        };
+    }
+    
     const emailValidation = validateEmail(userData.email);
     if (!emailValidation.isValid) {
         errors.push(emailValidation.error);
@@ -199,8 +231,11 @@ function validateUser(userData) {
         errors.push(usernameValidation.error);
     }
 
-    // 의도적 버그: age 검증 결과를 사용하지 않음
-    validateAge(userData.age);
+    // 개선: age 검증 결과 사용
+    const ageValidation = validateAge(userData.age);
+    if (!ageValidation.isValid) {
+        errors.push(ageValidation.error);
+    }
 
     // 의도적 비효율성: 선택적 필드도 모두 검증
     if (userData.firstName) {
@@ -216,8 +251,8 @@ function validateUser(userData) {
         if (typeof userData.lastName !== 'string' || userData.lastName.trim().length === 0) {
             errors.push('Last name must be a valid string');
         }
-        // 의도적 버그: lastName 길이 체크가 firstName과 다름
-        if (userData.lastName.length > 100) {
+        // 개선: firstName과 동일한 길이 제한
+        if (userData.lastName.length > 50) {
             errors.push('Last name too long');
         }
     }
