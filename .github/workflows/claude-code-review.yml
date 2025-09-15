@@ -37,17 +37,79 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Please review this pull request and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
-            
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            # 🤖 AI 에이전트 기반 종합 PR 리뷰
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
-          
+            이 PR을 다음 3가지 관점에서 종합적으로 분석해주세요:
+
+            ## 1. 코드 구조 및 로직 분석
+            다음 관점에서 집중적으로 검토해주세요:
+            - 코드 구조와 아키텍처 변경사항
+            - 로직의 정확성 및 버그 탐지
+            - 에러 처리 및 예외 상황 대응
+            - 코드 가독성 및 유지보수성
+            - 파일 간 일관성 및 통합성
+
+            ## 2. 보안 및 성능 검토
+            다음 관점에서 집중적으로 분석해주세요:
+            - 보안 취약점 (XSS, 입력 검증, 인증/인가 등)
+            - 성능 이슈 및 최적화 포인트
+            - 메모리 누수 가능성
+            - 브라우저/플랫폼 호환성 이슈
+            - 의존성 및 라이브러리 보안
+
+            ## 3. 베스트 프랙티스 및 코드 스타일
+            다음 관점에서 평가해주세요:
+            - 언어별 베스트 프랙티스 준수
+            - 디자인 패턴 활용
+            - 코드 스타일 일관성
+            - 주석 및 문서화 품질
+            - 테스트 가능성 및 모듈화
+
+            먼저 `gh pr diff ${{ github.event.pull_request.number }}` 명령어로 전체 변경사항을 확인한 후, 위 3가지 관점을 통합하여 다음 템플릿으로 GitHub 코멘트를 생성해주세요:
+
+            ```bash
+            gh pr comment ${{ github.event.pull_request.number }} --body "$(cat <<'REVIEW_EOF'
+            ## 🤖 AI 워크플로우 기반 종합 PR 리뷰
+
+            **PR #${{ github.event.pull_request.number }} 전체 리뷰입니다.**
+
+            ### 📊 **종합 평가**
+            - **코드 품질**: [점수]/10
+            - **보안 위험도**: [낮음/중간/높음]
+            - **베스트 프랙티스**: [준수도]
+
+            ---
+
+            ## 🔴 **긴급 수정 필요 (Critical)**
+            [Critical 이슈들 정리]
+
+            ---
+
+            ## 🟡 **중요 개선사항 (Major)**
+            [Major 이슈들 정리]
+
+            ---
+
+            ## 🟢 **권장 개선사항 (Minor)**
+            [Minor 이슈들 정리]
+
+            ---
+
+            ## ✅ **잘 구현된 부분**
+            [발견한 강점들 정리]
+
+            ---
+
+            ## 🎯 **우선 수정 권장사항**
+            [우선순위별 수정사항 나열]
+
+            ---
+
+            **🤖 이 리뷰는 코드품질, 보안성능, 베스트프랙티스 관점에서 분석한 종합 결과입니다.**
+            REVIEW_EOF
+            )"
+            ```
+
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.anthropic.com/en/docs/claude-code/sdk#command-line for available options
           claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
